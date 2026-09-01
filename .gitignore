@@ -1,0 +1,81 @@
+# ---------------------------------------------------------------------------
+# This repository holds source code only. Everything an experiment produces or
+# consumes -- data, model weights, logs, receipts, figures -- stays out of it.
+# ---------------------------------------------------------------------------
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# environments and caches
+envs/
+venv/
+.venv/
+bfcl_venv/
+.cache/
+hf_cache/
+*.lock
+
+# working trees: checkpoints, merged models, episode logs, eval records
+work/
+outputs/
+logs/
+receipts/
+runs/
+ckpt_*/
+merged_*/
+run_*/
+
+# data of every kind
+*.parquet
+*.jsonl
+*.csv
+*.tsv
+*.db
+*.sqlite
+*.sqlite3
+*.arrow
+*.npy
+*.npz
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+*.tar
+*.tar.gz
+*.zip
+pools/
+excluded_tasks*
+task_pool*
+*_records.jsonl
+cells.json
+predictability.json
+identity_cells.json
+
+# paper sources and rendered artefacts
+*.tex
+*.pdf
+*.aux
+*.bbl
+*.blg
+*.out
+*.synctex.gz
+*.png
+*.jpg
+*.svg
+*.pptx
+fig/
+figs/
+
+# notes, plans, receipts, editor backups
+*.bak
+*.bak-*
+*~
+.DS_Store
+PLAN_*.md
+HANDOFF.md
+GATE_*.md
+*_FROZEN.md

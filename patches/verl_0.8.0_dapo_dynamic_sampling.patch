@@ -1,0 +1,156 @@
+# DAPO dynamic sampling for verl 0.8.0
+#
+# verl 0.8.0 ships AlgoConfig.filter_groups but implements the dynamic-sampling loop only
+# in recipe/dapo/dapo_ray_trainer.py, which the pip wheel does not install. Setting
+# algorithm.filter_groups.enable is therefore a SILENT NO-OP on a stock wheel: the run
+# starts, nothing reads the flag, and the arm is an ordinary GRPO run wearing the DAPO
+# label. This patch adds the loop to the installed trainer, gated on exactly those keys.
+#
+# Apply against site-packages of the mcp_verl environment:
+#
+#     cd "$BRACE_ENVS/mcp_verl/lib/python3.12/site-packages"
+#     patch -p0 verl/trainer/ppo/ray_trainer.py < "$BRACE_ROOT/patches/verl_0.8.0_dapo_dynamic_sampling.patch"
+#
+# Confirm it is active by the "[dapo] ..." lines in the training log; do not assume DAPO
+# is running because the job started. slurm/verl_awm_train_agent.sh is the wrapper that
+# adds the Hydra keys (`+algorithm.filter_groups.*`), and DAPO_MAX_GEN_BATCHES caps how
+# many generation batches may be drawn to fill one training batch.
+--- verl/trainer/ppo/ray_trainer.py.orig
++++ verl/trainer/ppo/ray_trainer.py
+@@ -1419,6 +1419,14 @@
+         )
+         next_step_profile = False
+ 
++        # --- DAPO dynamic sampling (algorithm.filter_groups) ---------------------------------
++        # Upstream verl ships the dynamic-sampling loop only in recipe/dapo/, which is NOT part
++        # of the pip wheel: AlgoConfig.filter_groups existed here but nothing ever read it.
++        # State for the oversampling loop below; inert unless filter_groups.enable is set.
++        dapo_buf = None
++        dapo_num_prompt_in_batch = 0
++        dapo_num_gen_batches = 0
++
+         for epoch in range(current_epoch, self.config.trainer.total_epochs):
+             for batch_dict in self.train_dataloader:
+                 if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
+@@ -1434,6 +1442,7 @@
+                     )
+                 batch: DataProto = DataProto.from_single_dict(batch_dict)
+                 batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
++                dapo_num_gen_batches += 1
+ 
+                 # add uid to batch
+                 batch.non_tensor_batch["uid"] = np.array(
+@@ -1524,6 +1533,113 @@
+                         # extract reward_tensor and reward_extra_infos_dict for training
+                         reward_tensor, reward_extra_infos_dict = extract_reward(batch)
+ 
++                    # ---- DAPO dynamic sampling (algorithm.filter_groups) --------------------
++                    # Drop every group whose rollouts all share a reward (zero within-group
++                    # advantage => zero gradient) and keep drawing generation batches until
++                    # data.train_batch_size informative prompts have accumulated. Placed here so
++                    # discarded rollouts cost generation only, not the log-prob/ref/critic passes.
++                    try:
++                        fg_cfg = self.config.algorithm.get("filter_groups", None)
++                    except Exception:
++                        fg_cfg = None
++                    if fg_cfg is not None and fg_cfg.get("enable", False):
++                        # Fold the reward into the proto so slicing/concat carry it with the rows.
++                        batch.batch["token_level_scores"] = reward_tensor
++                        n_rows = len(batch)
++                        for _k, _v in (reward_extra_infos_dict or {}).items():
++                            if len(_v) == n_rows:
++                                batch.non_tensor_batch[_k] = np.array(_v)
++                        metric_name = fg_cfg.get("metric", None) or "seq_final_reward"
++                        if metric_name not in batch.non_tensor_batch:
++                            batch.non_tensor_batch[metric_name] = (
++                                batch.batch["token_level_scores"].sum(dim=-1).cpu().numpy()
++                            )
++                        uids = batch.non_tensor_batch["uid"]
++                        uid2vals = defaultdict(list)
++                        uid2idx = defaultdict(list)
++                        for _i, (_uid, _v) in enumerate(zip(uids, batch.non_tensor_batch[metric_name])):
++                            uid2vals[_uid].append(_v)
++                            uid2idx[_uid].append(_i)
++                        # a group is informative iff its rollouts do not all share one reward
++                        kept_uids = [u for u, vs in uid2vals.items() if len(vs) == 1 or np.std(vs) > 0]
++                        # regroup so each prompt's rollouts stay contiguous: _balance_batch above
++                        # reorders rows, and the [:traj_bsz] cut below must land on a group edge
++                        keep_idx = [i for u in kept_uids for i in uid2idx[u]]
++                        dapo_num_prompt_in_batch += len(kept_uids)
++                        # per-row-derived meta_info would collide in concat; recomputed on assembly
++                        for _k in ("global_token_num", "images_seqlens"):
++                            batch.meta_info.pop(_k, None)
++                        kept_batch = batch[keep_idx]
++                        dapo_buf = (
++                            kept_batch if dapo_buf is None else DataProto.concat([dapo_buf, kept_batch])
++                        )
++                        prompt_bsz = self.config.data.train_batch_size
++                        print(
++                            f"[dapo] step {self.global_steps} gen_batch {dapo_num_gen_batches}: "
++                            f"kept {len(kept_uids)}/{len(uid2vals)} non-degenerate groups "
++                            f"({len(keep_idx)}/{n_rows} rollouts); buffered "
++                            f"{dapo_num_prompt_in_batch}/{prompt_bsz} prompts",
++                            flush=True,
++                        )
++                        metrics["dapo/kept_groups"] = len(kept_uids)
++                        metrics["dapo/gen_groups"] = len(uid2vals)
++                        metrics["dapo/num_gen_batches"] = dapo_num_gen_batches
++                        if dapo_num_prompt_in_batch < prompt_bsz:
++                            max_gb = int(fg_cfg.get("max_num_gen_batches", 0) or 0)
++                            if max_gb <= 0 or dapo_num_gen_batches < max_gb:
++                                progress_bar.set_postfix_str(
++                                    f"dapo oversample {dapo_num_prompt_in_batch}/{prompt_bsz}"
++                                )
++                                # generate_sequences above ends with sleep_replicas(), and this
++                                # round is about to generate again. Without waking the engine the
++                                # next request dies with EngineDeadError("cancelled") out of
++                                # vLLM's shm_broadcast -- observed on the first real run. verl
++                                # exposes no wake_up entry point; re-pushing the (unchanged)
++                                # weights is how its own validation path revives a slept replica.
++                                self.checkpoint_manager.update_weights(self.global_steps)
++                                continue
++                            # CAP REACHED. Upstream raises here, which kills the run; the driver then retries the
++                            # cycle and hits the same wall, so the cap bounds one attempt but not the work -- dapo
++                            # burned 19k episodes and 43 aborted jobs producing zero checkpoints that way. On this
++                            # substrate only ~3 of 32 groups survive filtering, so a full batch is often
++                            # unreachable. Train on what was already paid for, if it is at least one mini-batch.
++                            _mini = int(self.config.actor_rollout_ref.actor.ppo_mini_batch_size)
++                            if dapo_num_prompt_in_batch >= _mini:
++                                print(f"[dapo] cap {max_gb} reached with {dapo_num_prompt_in_batch}/{prompt_bsz} "
++                                      f"prompts; training on the partial batch", flush=True)
++                                prompt_bsz = dapo_num_prompt_in_batch
++                            else:
++                                raise ValueError(
++                                    f"DAPO dynamic sampling: {dapo_num_gen_batches} generation batches reached "
++                                    f"max_num_gen_batches={max_gb} with only {dapo_num_prompt_in_batch}/"
++                                    f"{prompt_bsz} non-degenerate prompts, below one mini-batch ({_mini}). "
++                                    f"Lower data.train_batch_size or raise the cap."
++                                )
++                        traj_bsz = prompt_bsz * self.config.actor_rollout_ref.rollout.n
++                        batch = dapo_buf[:traj_bsz]
++                        print(
++                            f"[dapo] step {self.global_steps}: batch filled after "
++                            f"{dapo_num_gen_batches} generation batches -> training on "
++                            f"{len(batch)} rollouts / {prompt_bsz} prompts",
++                            flush=True,
++                        )
++                        dapo_buf = None
++                        dapo_num_prompt_in_batch = 0
++                        dapo_num_gen_batches = 0
++                        # re-derive everything that was computed on the pre-filter batch
++                        reward_tensor = batch.batch["token_level_scores"]
++                        reward_extra_infos_dict = {}
++                        batch.meta_info["global_token_num"] = torch.sum(
++                            batch.batch["attention_mask"], dim=-1
++                        ).tolist()
++                        _img_seqlens = []
++                        for _mmi in batch.non_tensor_batch.get("multi_modal_inputs", []):
++                            if "image_grid_thw" in _mmi.keys():
++                                _img_seqlens.extend(_mmi["images_seqlens"].tolist())
++                        batch.meta_info["images_seqlens"] = _img_seqlens
++                        if self.config.trainer.balance_batch:
++                            self._balance_batch(batch, metrics=metrics)
++
+                     # Operating Mode Selection:
+                     # - Bypass mode: Sets old_log_probs = rollout_log_probs (2 policies: π_rollout, π_θ)
+                     # - Decoupled mode: Recomputes old_log_probs as proximal anchor (3 policies: π_rollout, π_old, π_θ)
