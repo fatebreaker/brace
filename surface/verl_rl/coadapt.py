@@ -35,7 +35,6 @@ ENVS = os.environ.get("BRACE_ENVS", os.path.join(R, "envs"))
 VERL_PY = os.environ.get("VERL_PY", os.path.join(ENVS, "mcp_verl", "bin", "python"))
 AWM_PY = os.environ.get("AWM_PY", os.path.join(ENVS, "mcp_awm", "bin", "python"))
 VLLM_PY = os.environ.get("VLLM_PY", os.path.join(ENVS, "mcp_vllm", "bin", "python"))
-
 SURF = f"{R}/surface/gate_surface/work/surfaces"
 
 def group_size() -> int:
@@ -113,9 +112,46 @@ def vark_trainer_agrees(cycle: int, steps: int, stats_path: str, log_path: str):
     # composition, and aborted a healthy q2bK whose trainer had in fact honoured the allocation
     # exactly. The pairing is structural, so it is asserted rather than guessed at.
     per_step = 2
-    if len(seen) < per_step * steps:
-        return False, (f"only {len(seen)} trainer histogram lines for {steps} steps "
-                       f"(expected {per_step * steps}: one per repeat site per step)")
+    # RESUMED CYCLES RUN FEWER STEPS THAN THE CYCLE TARGET, and the full-cycle comparison below is
+    # then arithmetically impossible: a trainer that resumes at step 5 of an 8-step cycle consumes
+    # only the remaining blocks, so its summed histogram is a FRACTION of the allocation and can
+    # never equal it. The 2026-09-06 disk-full restart hit exactly this and Gate C killed a healthy
+    # q2bK3 -- the SECOND false positive from this gate (the first, 2026-08-24, was the double-count
+    # of paired lines). The gate's purpose is to catch a silently unarmed monkeypatch, i.e. a run
+    # that trains at uniform k while every artifact says variable k. That purpose is preserved on a
+    # partial cycle by the structural checks plus a SUBSET check; only the exact sum is skipped, and
+    # skipping it is announced rather than silent.
+    if len(seen) == 0:
+        return False, ("the trainer printed NO '[vark] repeat' line -- the monkeypatch never armed")
+    if len(seen) % per_step != 0:
+        return False, (f"{len(seen)} trainer histogram lines is not a whole number of "
+                       f"{per_step}-line steps: a repeat site did not print")
+    pairs = len(seen) // per_step
+    partial = pairs < steps
+    if partial:
+        for i in range(0, len(seen), per_step):
+            if seen[i] != seen[i + 1]:
+                return False, (f"the two repeat sites disagree within a step: {seen[i]} vs "
+                               f"{seen[i + 1]} -- the batch-side repeat did not mirror the "
+                               f"generation-side one")
+        gotp = {}
+        for d in seen[0::per_step]:
+            for kk, vv in d.items():
+                gotp[kk] = gotp.get(kk, 0) + vv
+        stray = sorted(set(gotp) - set(want))
+        if stray:
+            return False, (f"trainer used group sizes {stray} that the allocator never assigned "
+                           f"(trainer {gotp}, allocator {want})")
+        # NO uniform-k check here. It was tried on 2026-09-06 and false-positived within minutes:
+        # the allocator spreads its non-default sizes thinly (14 of 256 rows at 2 or 8), and the
+        # allocation is per 32-row block, so a block that is entirely k=5 is COMMON and legitimate.
+        # An unarmed patch is already caught above by printing no lines at all; a patch that prints
+        # a per-row histogram is by definition armed. That check added nothing and killed q2bK3 a
+        # second time in one evening.
+        return True, (f"PARTIAL CYCLE ({pairs} of {steps} steps ran, so this cycle was resumed): "
+                      f"exact-sum check SKIPPED as arithmetically impossible; verified instead that "
+                      f"the patch armed, both repeat sites mirrored, and every realized group size "
+                      f"{sorted(gotp)} is one the allocator assigned {sorted(want)}")
     tail = seen[-per_step * steps:]
     for i in range(0, len(tail), per_step):
         if tail[i] != tail[i + 1]:
@@ -689,10 +725,10 @@ def main() -> int:
         slots = os.environ.get("AWM_SLOTS_TRAIN", "1")
         # GPU_RELEASE_KEEP: DEFAULTED HERE SO THE 2026-08-24 07:30 INCIDENT CANNOT RECUR.
         # gpu_release.sh kills EVERY compute-app pid in the job cgroup unless this regex matches
-        # the pid or one of its ancestors, and it shipped unset for every arm. On one occasion that
-        # swept an arm's own allocation sixty seconds after a clean boot: it killed the torch
-        # keepalive HOLDING THE ALLOCATION and, worse, an unrelated tenant's training job on the
-        # same shared node. gpu_release.sh's own
+        # the pid or one of its ancestors, and it shipped unset for every arm. On 2026-08-24 that
+        # swept q4bTa's own pod 63549959 sixty seconds after a clean boot: it killed the torch
+        # keepalive HOLDING THE ALLOCATION (pid 4088867) and, worse, the crossworld project's
+        # dreamer.py (pid 768485) -- another group's job, on a shared node. gpu_release.sh's own
         # header predicts exactly this ("killing the keepalive is how the pod itself gets reaped
         # by the idle guard"); the guard existed and nothing set it.
         #
@@ -702,8 +738,7 @@ def main() -> int:
         # the one you get by doing nothing, which is the opposite of the arrangement that failed.
         keep = os.environ.get(
             "GPU_RELEASE_KEEP",
-            # Add any co-tenant process pattern that must survive the sweep on a shared node.
-            r"gpu_keepalive|import torch, time",
+            r"gpu_keepalive|crossworld|dreamer\.py|venv_track6dreamer|import torch, time",
         )
         cell(f"export GPU_RELEASE_KEEP={shlex.quote(keep)}; bash {R}/slurm/gpu_release.sh; "
              f"export TAG={a.tag} STEPS={target} AWM_RL_MAX_SLOTS={slots} AWM_ADVERTISED={adv}{envmap}; "

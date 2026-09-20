@@ -74,6 +74,7 @@ surface/
 | `surface/verl_rl/main_table.py` | cell loading, pairing, McNemar, per-arm bookkeeping |
 | `surface/verl_rl/paper_figures.py`, `plot_curve.py` | the figures drawn from training cells |
 | `surface/paper/make_figures.py` | the Section 2 to 4 diagnostics |
+| `surface/paper/figs/make_figure3.py`, `make_figure4.py` | Figures 3 and 4, self-contained: matplotlib only, values frozen from the emitters above, for redrawing without a cluster |
 
 ## Environment variables
 

@@ -8,7 +8,7 @@ R=${BRACE_ROOT:?BRACE_ROOT is unset; source env.sh first}
 CELL=$1; TAG=${2:-coadapt}
 # 2B/4B arms merge onto their own base; the supervisor path never sets MODEL_FAMILY,
 # so infer it from the tag (q2bN step-20 merged onto the 8B base: 300/300 shape mismatches).
-case "$TAG" in q2b*|t2b*) MODEL_FAMILY=${MODEL_FAMILY:-2B};; q4b*) MODEL_FAMILY=${MODEL_FAMILY:-4B};; esac
+case "$TAG" in q2b*|t2b*) MODEL_FAMILY=${MODEL_FAMILY:-2B};; q4b*|t4b*) MODEL_FAMILY=${MODEL_FAMILY:-4B};; esac
 SMAP=""
 EV=$BRACE_ENVS/mcp_verl
 ES=$BRACE_ENVS/mcp_vllm

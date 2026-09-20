@@ -134,7 +134,14 @@ def model_of(tag: str, registry: dict | None = None) -> str:
         # launched from logs/.ablate_finish*.sh and logs/.rerun_finish*.sh are not, and all seven
         # of them came back 8B. The fallback now builds a name of the SAME SHAPE the registry
         # returns, so there is one parse and not two.
-        size = "2B" if tag.startswith("q2b") else "4B" if tag.startswith("q4b") else None
+        # 2026-09-01: this test was a literal prefix match on "q2b"/"q4b", so an unregistered arm
+        # launched under any other leading letter fell through to the 8B default. t2bTbk, the
+        # TRACE-plus-our-bank arm at 2B, came back "8B" and could not join its own family. The size
+        # is the SECOND character whenever the third is "b", so the test reads that instead of
+        # enumerating prefixes. Checked over all 135 eval directories before the change: exactly
+        # one arm is reclassified (t2bTbk, 8B -> 2B) and nothing else moves.
+        m0 = re.match(r"^[a-z](\d)b", tag)
+        size = (m0.group(1) + "B") if m0 else None
         name = DEFAULT_MODEL if size is None else "Qwen/Qwen3-VL-%s-Instruct" % size
     m = re.search(r"-(\d+)B-", name)
     return f"{m.group(1)}B" if m else "8B"

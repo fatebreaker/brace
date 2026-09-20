@@ -64,13 +64,28 @@ SERIES = [
     # disclosed, in the caption, in Section 7.2's reading paragraph and in the appendix; only the
     # legend text is shorter. Shortening it also returns the saved width the longer label cost
     # (the legend row, not the axes, sets this figure's width -- see the fig.legend comment).
-    ("\\quad \\methodname{}", "BRACE", "#0072B2", "-", "o", 1.9, 3.6),
+    # 2026-09-09 (PI: "why our method line seem bolder than other line? make it normal").
+    # \methodname{} was drawn at lw 1.9 / ms 3.6 against every baseline's 0.95 / ~2.5, which
+    # is a presentational thumb on the scale in our own favour. Same weight as the rest now;
+    # it stays identifiable by being the only SOLID line, and by its hue.
+    ("\\quad \\methodname{}", "BRACE", "#0072B2", "-", "o", 0.95, 2.5),
     ("\\quad \\textsc{Plr}", "PLR", "#6E7B8B", "--", "s", 0.95, 2.5),
     ("\\quad \\textsc{Rag}-\\textsc{Mcp}", "RAG-MCP", "#8C8C8C", "-.", "^", 0.95, 2.5),
     ("\\quad \\textsc{Dapo}", "DAPO", "#B07AA1", ":", "D", 0.95, 2.2),
     ("\\quad \\textsc{Tscl}", "TSCL", "#5F9E93", (0, (3, 1, 1, 1)), "v", 0.95, 2.5),
     ("\\quad \\textsc{Trace}", "TRACE", "#A6893C", (0, (5, 2)), "P", 0.95, 2.6),
     ("\\quad \\textsc{Vip}", "VIP", "#9C6B5E", (0, (1, 1.4)), "X", 0.95, 2.6),
+    # 2026-09-02 (PI 03:40): THE UNIFORM CONTROL COMES BACK, AND IT IS DRAWN LIKE A PUBLISHED
+    # RULE AND NOT LIKE OURS. It is a published rule \citep{shao2024deepseekmath}, it is now a row
+    # of tab:main, and its 8B trajectory crosses the method's inside the window, which is the
+    # paper's own scope condition and belongs in the main text rather than in an appendix table.
+    # Thin, muted and at the same weight as the six baselines; \methodname{} stays the only heavy
+    # line and the only entry labelled BRACE. Its ink is a DARKER grey than RAG-MCP's #8C8C8C
+    # (head.tex fixes trGrey as the control's colour and RAG-MCP already holds that hex here), and
+    # it carries its own dash pattern and marker, so the eight lines survive greyscale and
+    # deuteranopia as before.
+    ("\\quad uniform \\textsc{Grpo} (control)", "uniform GRPO", "#4D4D4D", (0, (2, 1, 4, 1)),
+     "*", 0.95, 3.4),
 ]
 GAUGE = "#8C8C8C"
 
@@ -170,7 +185,21 @@ def emit_figures(outdir):
     log = []
     for ax, model in zip(axes, PN.MAIN_SCALES):
         fam = fams[model][0]
-        ax.axhline(0.0, color="k", lw=0.7, zorder=1)
+        # 2026-09-09 (PI): every line now starts at step 0 from the untrained base policy, which
+        # is the one point every arm genuinely shares -- no arm has trained yet, so they are the
+        # same checkpoint. The anchor is collected in a first pass because it has to be known
+        # before the first curve is drawn.
+        baserates = []
+        for i, (_, name, col, ls, mk, lw, ms) in enumerate(SERIES):
+            arms0 = spec[i].get(model)
+            if arms0 is PN.NOT_RUN or arms0 is PN.IN_FLIGHT:
+                continue
+            a0 = PN.agg(fam, arms0 or [], best=True)
+            if a0 is None:
+                continue
+            baserates.extend(a0["basr"][s] for s in PN.WINDOW if s in a0.get("basr", {}))
+        base0 = 100.0 * sum(baserates) / len(baserates) if baserates else None
+
         for i, (_, name, col, ls, mk, lw, ms) in enumerate(SERIES):
             arms = spec[i].get(model)
             if arms is PN.NOT_RUN or arms is PN.IN_FLIGHT:
@@ -183,45 +212,36 @@ def emit_figures(outdir):
             if a is None:
                 continue
             xs = [s for s in PN.WINDOW if s in a["per"]]
-            ys = [100.0 * a["per"][s] for s in xs]
+            # 2026-09-09 (PI): the ABSOLUTE held-out solve rate, not the effect. a["absr"] is the
+            # arm's rate on the same arm-vs-base intersection the effect is computed on, so the
+            # panel's dashed base line and these curves are exactly reconciled: absr - basr == per.
+            ys = [100.0 * a["absr"][s] for s in xs]
+            if base0 is not None:
+                xs = [0] + xs
+                ys = [base0] + ys
             ax.plot(xs, ys, color=col, ls=ls, marker=mk, ms=ms, lw=lw,
                     zorder=4 if i == 0 else 3)
             log.append((model, name, ["%+.1f" % y for y in ys], "%+.1f" % (100 * a["mean"]),
                         a["sel"], a["n"]))
+        # 2026-09-09 (PI): the base-policy dashed line is REMOVED. baserates is still collected
+        # because paper_numbers carries it and a later pass may want it; nothing draws it.
         ax.set_title("Qwen3-VL-%s" % model)
-        ax.set_xticks(PN.WINDOW)
-        ax.set_xlim(13.0, 35.0)
-    # THE FLOOR AS A LENGTH, NOT AS A BAND. Drawn as a capped gauge of exactly FLOOR_PP in the
-    # panels' own units, so the reader compares it against the vertical gaps between the curves by
-    # eye: no gap in any panel reaches it. A shaded +-FLOOR_PP band about the method's window mean
-    # was tried first and covered every panel almost entirely, which reads as a printing fault
-    # rather than as the finding it is.
-    axes[0].set_ylabel("held-out effect (pp)")
-    # 2026-08-29: WIDENED for the six published rules. The control line this figure used to draw
-    # never went below -0.1, so -2.4 held; TSCL and VIP at 8B run to -3.9, and an axis that
-    # clipped them would hide exactly the baselines the figure now exists to show. Set from the
-    # drawn data, not by taste: the extremes are -3.9 (TSCL/VIP at 8B) and +5.8 (the method at
-    # 4B), with a margin that keeps the floor gauge and its label inside the panel.
-    axes[0].set_ylim(-5.0, 7.0)
+        ax.set_xticks([0] + list(PN.WINDOW))
+        ax.set_xlim(-1.8, 31.6)
+    # 2026-09-09 (PI): the 6.0pp floor gauge is REMOVED from the artwork. The floor itself is
+    # unchanged and is still stated in the caption and in Section~\ref{sec:triage-protocol}; it is
+    # simply no longer drawn. NOTE FOR THE NEXT EDIT: the gauge's explanatory comment used to sit
+    # ABOVE the three axis lines below, so deleting the comment-to-xlabel span silently took the
+    # y label, the y limits and the tick locator with it. They are restored here, below the note.
+    axes[0].set_ylabel("held-out solve rate (%)")
+    # Limits set from the drawn data, not by taste: with absolute rates the extremes are 7.46
+    # (TSCL and VIP at 8B) and 16.53 (the method at 8B), with a margin that keeps every curve and
+    # its markers clear of the panel edge.
+    axes[0].set_ylim(6.0, 18.0)
     # TICKS EVERY 2pp, so the reader has a rule to measure a gap against rather than a top and a
     # bottom. MultipleLocator and not MaxNLocator: the step is the thing being fixed here.
     from matplotlib.ticker import MultipleLocator
     axes[0].yaxis.set_major_locator(MultipleLocator(2))
-    for k, ax in enumerate(axes):
-        # The gauge sits to the RIGHT of the last step, in a strip of the panel no curve reaches,
-        # and its label is set vertically beside it: laid horizontally inside the panel the label
-        # printed on top of the 2B curves, which is the one place a legibility fix must not land.
-        # Raised 2026-08-29 with the widened axis: at the old offset the gauge's label hung
-        # into the tick-label band at the foot of the panel. The gauge is a LENGTH and its
-        # vertical position carries no meaning, so it is free to sit where it is legible.
-        y0 = -3.0
-        ax.annotate("", xy=(33.1, y0), xytext=(33.1, y0 + FLOOR_PP),
-                    arrowprops=dict(arrowstyle="|-|,widthA=0.5,widthB=0.5",
-                                    lw=0.9, color=GAUGE, shrinkA=0, shrinkB=0))
-        # HORIZONTAL, and short. Set vertically beside the gauge it printed cramped at page size;
-        # what the gauge IS is one clause of the caption, so the label only has to carry its length.
-        ax.text(33.1, y0 - 0.28, "%.1f pp" % FLOOR_PP, fontsize=8, color=GAUGE,
-                ha="center", va="top")
     axes[1].set_xlabel("checkpoint step")
 
     handles = [Line2D([], [], color=c, ls=ls, marker=mk, ms=ms, lw=lw, label=n)
@@ -236,9 +256,14 @@ def emit_figures(outdir):
     # placement scale (and with it the printed height, which has a 6.2 cm floor the PI set).
     # Paid for inside the legend rather than by shortening the label back: handles and column
     # gaps trimmed, which costs nothing legible and returns the width.
-    fig.legend(handles=handles, loc="lower center", ncol=7, frameon=False,
-               bbox_to_anchor=(0.5, -0.155), handlelength=1.25, handletextpad=0.28,
-               columnspacing=0.75, labelspacing=0.2)
+    # 2026-09-02: EIGHT entries, still ONE row, still narrower than the axes. The control's label
+    # is the longest in the legend, so the width it costs is paid back inside the legend (handles
+    # and column gaps trimmed) rather than by wrapping to two rows or by widening the saved PDF:
+    # the legend row sets this figure's tight bbox, and a wider bbox drops the placement scale and
+    # with it every printed point size. The emitted width is checked against the axes below.
+    fig.legend(handles=handles, loc="lower center", ncol=len(SERIES), frameon=False,
+               bbox_to_anchor=(0.5, -0.155), handlelength=1.05, handletextpad=0.24,
+               columnspacing=0.52, labelspacing=0.2)
     fig.savefig(os.path.join(outdir, "stepcurve.pdf"))
     plt.close(fig)
     print("[stepcurve] wrote %s/stepcurve.pdf" % outdir)
@@ -557,11 +582,35 @@ TRGREEN_TINT = "#73AB9C"   # trGreen blended 45% into white; still >= 3:1 agains
 # what changed is the six words a reader sees. The selection is disclosed where a reader can act
 # on it -- the caption, Section 7.3's transfer paragraph and Table~\ref{tab:transfermain} -- and
 # not inside a legend entry that has to be parsed before any bar can be read.
+# 2026-09-02 (PI 02:40): THE BAR IS THE REGISTERED FULL RECIPE, NOT A PER-COLUMN MAXIMUM. The key
+# below moves from the "(column best)" row of tab:transfermain to the "(full)" row, which is the
+# row tab:main now prints at every scale, so the figure, Table 1 and Section 7.3 are one
+# configuration and the paper contains no selected cell. The legend text is unchanged ("BRACE"),
+# and the per-column maximum is not withdrawn from the paper: it is still a printed row of
+# tab:transfermain, where every configuration it ranges over is printed beside it.
+# 2026-09-07 (PI): RAG-MCP AND DAPO ADDED. They were absent not by any rule but because this list
+# was written before their transfer cells existed, and RAG-MCP is the rule that ties the method at
+# 4B in tab:main -- the strongest competitor missing from the transfer figure is what a reader is
+# entitled to call selective, whatever the history. Both have every cell (RAG-MCP at steps 30/30,
+# 30/30, 15/30; DAPO at 30/30, 30/30, 15/15) and the caption states that some 8B cells are read
+# earlier, as tab:transfermain's subscripts already do. Including them cuts both ways and that is
+# the point: RAG-MCP beats the method on BFCL at 4B, and it also falls below the untrained policy
+# twice, which is the claim the paper makes about every published rule.
+# TSCL IS NOW DRAWN, and the note that stood here was STALE AND WRONG. It said its 2B and 4B
+# NESTFUL cells "do not exist (the adapters were pruned)", which described the state before
+# 2026-08-31. The pre-registered reruns q2bLp2 and q4bLp2 measured both transfer cells at both
+# scales that day, TRANSFER_RERUN in paper_numbers.py has displayed them ever since, and
+# tab:transfermain has printed the full TSCL row (12.8ddag/29.1ddag/24.1 on BFCL, 26.38/30.84/32.99
+# on NESTFUL) with the ddag rerun marker its own note explains. Nothing was missing; only this
+# comment was. Verified 2026-09-08 against transfermain.tex and the records on scratch.
 BARS = [
-    ("\\quad \\methodname{} (column best)\\textsuperscript{\\S}",
+    ("\\quad \\methodname{} (full)",
      "BRACE", TRBLUE, TRBLUE, None),
     ("\\quad uniform \\textsc{Grpo}", "uniform GRPO (control)", TRGREY, TRGREY, None),
     ("\\quad \\textsc{Plr}", "PLR", TRGREEN, TRGREEN, None),
+    ("\\quad \\textsc{Rag}-\\textsc{Mcp}", "RAG-MCP", TRGREEN_TINT, TRGREEN, "///"),
+    ("\\quad \\textsc{Dapo}", "DAPO", "white", TRGREY, "..."),
+    ("\\quad \\textsc{Tscl}", "TSCL", TRGREEN_TINT, TRGREEN, "\\\\\\"),
     ("\\quad \\textsc{Trace}", "TRACE", TRGREEN_TINT,
      TRGREEN_TINT, None),
     ("\\quad \\textsc{Vip}", "VIP", "white", TRGREEN, None),
@@ -574,8 +623,9 @@ BARS = [
 # which is a fact about our own rows and not a descriptor of somebody else's method. The
 # "run as published, without our warm bank" disclosure is in tab:transfermain's block header and
 # in its note.
-PANELS = [("bfcl", "\\textsc{Bfcl} v4 multi-turn", "BFCL v4 multi-turn: pass rate, $n=800$"),
-          ("nest", "\\textsc{Nestful}", "NESTFUL: win rate, $n=1{,}861$")]
+PANELS = [("bfcl", "\\textsc{Bfcl} v4 multi-turn", "BFCL v4 multi-turn, $n=800$"),
+          ("nest", "\\textsc{Nestful}", "NESTFUL, $n=1{,}861$")]
+YLAB = {"bfcl": "pass rate (%)", "nest": "win rate (%)"}
 
 
 def emit_transfer_figure(outdir):
@@ -617,7 +667,10 @@ def emit_transfer_figure(outdir):
     # coordinates where fig.legend places the legend, and the legend then prints on top of the
     # scale labels. Caught by rendering the page, not by any measurement of the file.
     fig.subplots_adjust(bottom=0.20, top=0.88, wspace=0.26)
-    W = 0.132                       # six bars and a group gap inside a unit pitch
+    # W WAS 0.132, CHOSEN WHEN THIS FIGURE DREW SIX BARS. With eight, 8 x 0.132 = 1.056 per
+    # group against a unit pitch, so adjacent scale groups OVERLAPPED and the 0.5 divider fell
+    # inside the last bar of each group. 0.105 gives a half-width of 0.415, clear of it.
+    W = 0.105                      # eight bars and a real gap inside a unit pitch
     log = []
     for ax, (bm, _, title) in zip(axs, PANELS):
         base = d["base"][bm]
@@ -632,26 +685,31 @@ def emit_transfer_figure(outdir):
                     ax.text(x, 0.0, "n/a", fontsize=6.2, color=TRGREY, rotation=90,
                             ha="center", va="bottom")
                     continue
-                dv = v - base[sc]
-                vals.append(dv)
-                ax.bar(x, dv, width=W * 0.90, facecolor=fc, edgecolor=ec, hatch=ht,
+                # 2026-09-09 (PI): the ABSOLUTE score, no base subtraction. `base` is still read
+                # so the log below can report the comparison, and so the caption's "above its own
+                # base policy" claim has a source, but nothing subtracts it and nothing draws it.
+                vals.append(v)
+                ax.bar(x, v, width=W * 0.90, facecolor=fc, edgecolor=ec, hatch=ht,
                        linewidth=0.5, zorder=3)
-                log.append((bm, sc, lab, v, dv))
-        lo, hi = min(vals + [0.0]), max(vals + [0.0])
-        pad = 0.10 * (hi - lo)
-        ax.set_ylim(lo - pad, hi + pad)
+                log.append((bm, sc, lab, v, v - base[sc]))
+        # Bars run from 0, so the axis starts at 0: a truncated bar axis exaggerates differences
+        # and is the one distortion a bar chart must not commit.
+        ax.set_ylim(0.0, max(vals) * 1.10)
         ax.set_axisbelow(True)
         ax.grid(axis="x", visible=False)
-        ax.axhline(0.0, color=TRINK, lw=0.8, zorder=2)
+        # SCALE DIVIDERS (PI 2026-09-09). Drawn BETWEEN groups at the midpoints, behind the bars,
+        # so they separate 2B / 4B / 8B without competing with the zero rule, which is this
+        # figure's one datum line. They carry no value: eight adjacent bars otherwise read as a
+        # single run of sixteen and a reader has to count to find the group boundary.
+        for gi in range(len(scales) - 1):
+            ax.axvline(gi + 0.5, color=TRGREY, lw=0.7, alpha=0.85, zorder=1)
         ax.set_xticks(range(len(scales)))
         ax.set_xticklabels(scales)
         ax.set_xlim(-0.5, len(scales) - 0.5)
         ax.tick_params(axis="x", length=0, pad=2.0)
         ax.tick_params(axis="y", length=2, pad=1.5)
         ax.set_title(title, pad=3.0)
-        ax.set_ylabel("$\\Delta$ vs untrained base (pp)", labelpad=1.5)
-        # The zero rule IS the base policy, so the left spine may not also run through the bars.
-        ax.spines["bottom"].set_visible(False)
+        ax.set_ylabel(YLAB[bm], labelpad=1.5)
 
     handles = [Patch(facecolor=fc, edgecolor=ec, hatch=ht, linewidth=0.5, label=nm)
                for _, nm, fc, ec, ht in BARS]

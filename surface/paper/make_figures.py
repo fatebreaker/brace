@@ -255,15 +255,29 @@ def fig_calib():
     ax.legend(frameon=False, ncol=2, fontsize=7, handletextpad=0.4, borderpad=0.2,
               labelspacing=0.25, columnspacing=1.0)
     ax = axes[1]
+    # 2026-09-08 (PI: "the bottom right subfigure legend is unclear"). TWO DEFECTS, both fixed here.
+    # (1) The default handlelength is about 2.0 font units, which is SHORTER THAN ONE DASH CYCLE at
+    #     this figure size, so every handle rendered as a plain solid line and the two curves of a
+    #     colour -- the t-test and the permutation test -- were indistinguishable in the legend even
+    #     though they are drawn differently in the axes. handlelength is now long enough to show a
+    #     full dash cycle, and the dash is set explicitly rather than left to the "--" shorthand.
+    # (2) The legend was ordered paired-t / unpaired-t / paired-perm / unpaired-perm, which
+    #     interleaves the colours and hides that COLOUR is the pairing and DASH is the test family.
+    #     It is now grouped by colour, so the two encodings read off the legend directly.
     ds = ["0.00", "0.05", "0.10", "0.20"]
+    handles = {}
     for k, lab, col, hs in arms:
         y = [float(np.mean([d[c][k][t] for c in callers])) for t in ds]
-        ax.plot([float(t) for t in ds], y, "o-" if hs == "" else "o--",
-                color=col, lw=1.5, ms=3.5, label=lab)
+        (ln,) = ax.plot([float(t) for t in ds], y, marker="o", color=col, lw=1.5, ms=3.5,
+                        ls=(0, (3.5, 1.5)) if hs else "-", label=lab)
+        handles[k] = ln
     ax.set_xlabel("injected effect size"); ax.set_ylabel("power")
     ax.set_title("power, mean over callers")
-    ax.legend(frameon=False, fontsize=7, handletextpad=0.4, borderpad=0.2,
-              labelspacing=0.25)
+    grouped = ["paired_t", "paired_perm", "unpaired_t", "unpaired_perm"]
+    ax.legend([handles[k] for k in grouped if k in handles],
+              [dict((a[0], a[1]) for a in arms)[k] for k in grouped if k in handles],
+              frameon=False, fontsize=7, handletextpad=0.5, borderpad=0.2,
+              labelspacing=0.28, handlelength=2.9)
     fig.savefig(f"{OUT}/calibration_power.pdf")
     plt.close(fig)
 

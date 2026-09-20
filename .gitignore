@@ -69,6 +69,8 @@ identity_cells.json
 *.pptx
 fig/
 figs/
+!surface/paper/figs/
+!surface/paper/figs/*.py
 
 # notes, plans, receipts, editor backups
 *.bak

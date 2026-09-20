@@ -261,6 +261,51 @@ def sec_calib():
         print(f"     mean |error| {res[fam][0]:.4f} over {res[fam][1]} cycles")
     a = list(res.values())
     print(f"  the group model closes {100*(1-a[1][0]/a[0][0]):.1f}% of the independent model's bias")
+    _calib_trivial()
+
+
+def _calib_trivial():
+    """The cheapest predictor that could work, on fig:calibration's own 83 arm-cycles.
+
+    Review of 2026-09-02, P0-7: Figure~\ref{fig:calibration} compares the correlated model against
+    the independent one, which the paper has already shown is wrong by 0.59, and against nothing
+    else. The comparison a reader wants is against a predictor that carries no correlation model at
+    all -- the running mean of the degenerate fractions this family's earlier cycles realised. It is
+    computed here on the SAME rows the figure plots (work/analysis/calibration_matched.jsonl, the
+    file calibration_matched.py writes beside the figure) and under the SAME error metric this
+    section uses everywhere else, mean |predicted - measured| over cycles.
+
+    A family's first cycle has no earlier cycle and so has no trivial prediction; it is dropped,
+    and the calibrated model is re-scored on exactly the rows that survive so the two numbers are
+    paired rather than taken over different sets.
+    """
+    fp = f"{R}/work/analysis/calibration_matched.jsonl"
+    if not os.path.exists(fp):
+        print("  (no calibration_matched.jsonl: trivial-predictor baseline not computed)")
+        return
+    rows = [json.loads(l) for l in open(fp)]
+    fams = {}
+    for r in rows:
+        fams.setdefault(r["family"], []).append(r)
+    triv, cal, iid = [], [], []
+    for f in sorted(fams):
+        hist = []
+        for r in sorted(fams[f], key=lambda x: (x["arm"], x["cycle"])):
+            if hist:
+                triv.append(abs(sum(hist) / len(hist) - r["realised"]))
+                cal.append(abs(r["pred_cal"] - r["realised"]))
+                iid.append(abs(r["pred_iid"] - r["realised"]))
+            hist.append(r["realised"])
+    n = len(triv)
+    mt, mc = sum(triv) / n, sum(cal) / n
+    d = [x - y for x, y in zip(triv, cal)]
+    mu = sum(d) / n
+    se = math.sqrt(sum((x - mu) ** 2 for x in d) / (n - 1) / n)
+    print("  -- trivial predictor (running mean of the family's earlier realised fractions) --")
+    print(f"     over the same {n} of {len(rows)} arm-cycles: trivial {mt:.4f}, "
+          f"correlated {mc:.4f}, independent {sum(iid)/n:.4f}")
+    print(f"     paired difference trivial - correlated {mu:+.4f} +/- {se:.4f}; "
+          f"the correlated model is closer on {sum(1 for x in d if x > 0)} of {n} cycles")
 
 
 SEEDS = {"TRIAGE (v3g)": ["a8T3g", "a8T3gr", "a8T3g2"],
@@ -543,9 +588,51 @@ FAMILY_PIN = {
     # 2B block changes. The 2B family is saturated; that is a property of the 2B evidence, not a
     # convenience of this pass, and it is the reason the enumeration here is one line rather than
     # the arm-by-arm q table the 4B and 8B growths needed.
-    "2B": ["q2bD", "q2bF2", "q2bF3e5", "q2bF5", "q2bF6", "q2bF7", "q2bFs", "q2bLp", "q2bLp2",
+    # 2026-09-01 _fold6, second growth of this pass: 26 -> 27 by ONE arm, admitted under the same
+    # membership rule as every other member (an arm of this model with a scorable four-cell
+    # window):
+    #   + t2bTbk  FAITHFUL PUBLISHED TRACE AT 2B PLUS OUR WARM BANK, and nothing else: t2bTf with
+    #             --warm-bank at its default and no other change (diff verified at launch), one
+    #             seed at the same offset 500 its parent ran. It is the reviewer's P0 experiment,
+    #             the one that separates the bank's contribution from the allocation rule at a
+    #             scale where the bank is priced, and it carries a printed row in
+    #             tab:ladder2b, so it is pinned rather than read outside the correction.
+    # The growth moves nothing, measured rather than assumed: every 2B q was already 1.000 at
+    # m=26 and all twenty-seven are 1.000 at m=27, because no 2B arm clears the correction at any
+    # family size. The 2B family is saturated.
+    # 2026-09-03 _fold7h: 27 -> 28 by ONE arm, admitted under the same membership rule as every
+    # other member -- an arm of this model with a scorable four-cell window -- and not because of
+    # what it measures, which is a negative:
+    #   + q2bTrt  the PER-SCALE-$\rho$ CONFIGURATION AT THE NATURAL SAMPLING TEMPERATURE: q2bTr
+    #             with --temp 0.3 -> 1.12 and no other token changed, one seed at the parent's own
+    #             offset (500). Window +0.55 (-1.02/-0.17/+1.36/+2.03, n=590 at every step), the
+    #             weakest window of the 2B method family, against the parent's +2.67 and the full
+    #             recipe's +2.59. It carries a printed row in tab:negatives, so it is pinned
+    #             rather than read outside the correction.
+    # The growth moves nothing, measured rather than assumed: every 2B q was already 1.000 at
+    # m=27 and all twenty-eight are 1.000 at m=28, because no 2B arm clears the correction at any
+    # family size. The 2B family is saturated, as it has been since m=25.
+    # 2026-09-06 _fold12: 28 -> 29 by ONE arm, the 2B rung of the VARIABLE-k PILOT, admitted under
+    # the same membership rule as every other member -- an arm of this model with a scorable
+    # four-cell window and a printed row -- and not because of what it measures, which is the worst
+    # transfer outcome in this project:
+    #   + q2bK2   THE GROUP SIZE FREED UNDER ONE BUDGET: q2bT with VARK=1 and no other token
+    #             changed, one seed at the parent's own offset (500), the per-step rollout total
+    #             pinned to the uniform k=5 spend (sum k = 1280 = 8 x 160 at every cycle, read off
+    #             the run log). Window +1.27 (+1.86/+1.36/+0.85/+1.02, n=590 at every step)
+    #             against the fixed-k parent's +2.59; transfer BFCL 0.50 (base 15.12) and NESTFUL
+    #             17.89 (base 21.60). The allocator, free to act, moved fewer than 8% of rows off
+    #             k=5. It carries a printed row in tab:negatives, so it is pinned rather than read
+    #             outside the correction.
+    # The growth moves nothing, measured rather than assumed: every 2B q was already 1.000 at
+    # m=28 and all twenty-nine are 1.000 at m=29, because no 2B arm clears the correction at any
+    # family size. The 2B family is saturated, as it has been since m=25, and q2bK2 itself enters
+    # at raw p = 0.522, q = 1.000, so what it costs is m and nothing else.
+    "2B": ["q2bD", "q2bF2", "q2bF3e5", "q2bF5", "q2bF6", "q2bF7", "q2bFs", "q2bK2", "q2bLp",
+           "q2bLp2",
            "q2bN", "q2bP", "q2bR", "q2bT", "q2bT3", "q2bT3e", "q2bTd", "q2bTiid", "q2bTk8",
-           "q2bTnw", "q2bTpe", "q2bTr", "q2bTs", "q2bV", "q2bV2", "q2bVf", "t2bTf"],
+           "q2bTnw", "q2bTpe", "q2bTr", "q2bTrt", "q2bTs", "q2bV", "q2bV2", "q2bVf", "t2bTbk",
+           "t2bTf"],
     # 15 arms -- grown from 10 on 2026-08-27 (the comprehensive-grid pass) by FIVE measured arms,
     # each enumerated here because growing a family moves every q in it and that must never be a
     # silent side effect:
@@ -580,9 +667,79 @@ FAMILY_PIN = {
     #             BELOW the uniform control, which is printed rather than softened.
     #   + q4bLp2  the pre-registered TSCL rerun at 4B, the 4B counterpart of q2bLp2 and for the
     #             same reason. Window +2.54 (solve 12.2) against q4bLp's +2.63.
-    "4B": ["q4bD", "q4bF", "q4bF2", "q4bLp", "q4bLp2", "q4bP", "q4bR", "q4bT", "q4bT2",
-           "q4bTiid", "q4bTnw", "q4bV",
-           "q4bV2", "q4bTvip", "q4bTr", "q4bTr2", "q4bTr3", "q4bTpe", "q4bTpe2", "q4bTf"],
+    # 2026-09-02 _fold7c: 20 -> 21 by ONE arm, admitted under the same membership rule every other
+    # member is admitted under -- an arm of this model with a scorable four-cell window -- and not
+    # because of what it measures:
+    #   + t4bTbk  FAITHFUL PUBLISHED TRACE AT 4B PLUS OUR WARM BANK: q4bTf with --warm-bank at its
+    #             default and no other flag changed, one seed at the same offset its parent ran.
+    #             It is the 4B counterpart of t2bTbk and the second rung of the reviewer's
+    #             bank-confound construction, and it carries a printed row in tab:ladder2b, so it
+    #             is pinned rather than read outside the correction.
+    # WHAT THE GROWTH MOVES, measured arm by arm rather than assumed: 20 -> 21 raises every 4B q,
+    # and the emitter's own audit block prints the before/after for each. No verdict crosses 0.05
+    # in either direction -- the two 4B arms that clear (per-scale rho, VIP rule with our bank)
+    # still clear and everything outside stays outside -- which is what makes this growth a cost
+    # paid rather than a result bought.
+    # 2026-09-03 _fold7h: 21 -> 22 by ONE arm, the 4B counterpart of the 2B admission above and
+    # admitted under the same rule:
+    #   + q4bTrt  q4bTr with --temp 0.3 -> 1.12 and no other token changed, one seed at the
+    #             parent's own offset (500). Window +1.74 (+0.68/+2.71/+2.03/+1.53, n=590 at
+    #             every step) against the parent's +5.21 and the full recipe's +3.64. Printed
+    #             row in tab:negatives.
+    # WHAT THE GROWTH MOVES, measured arm by arm rather than assumed: 21 -> 22 raises every 4B q
+    # and none falls. NO VERDICT CROSSES 0.05 in either direction -- the same two 4B arms clear
+    # (per-scale rho q4bTr, VIP's rule on our bank q4bV) and everything outside stays outside; the
+    # largest movement is q4bTr2 0.8025 -> 0.8754 and the closest pair to the line, q4bV2, goes
+    # 0.0747 -> 0.0787. The arm itself enters at raw p = 0.557, q = 1.000, so what it costs is m
+    # and nothing else.
+    # 2026-09-04 _fold10: 22 -> 24 by TWO arms, THE 4B LEARNING-RATE RUNG. They are the 4B
+    # counterparts of q2bF3e5 and q2bT3e, admitted under the same membership rule as every other
+    # member -- an arm of this model with a scorable four-cell window -- and they carry printed
+    # rows in tab:lrsweep, so they are pinned rather than read outside the correction:
+    #   + q4bF3e5 the UNIFORM control at LEARNING RATE 3e-5 (q4bF with that token alone changed),
+    #             one seed at the parent's own offset 500. Window +2.08
+    #             (+2.03/+2.20/+1.69/+2.37); transfer BFCL 28.50 and NESTFUL 29.61.
+    #   + q4bT3e5 the METHOD at the same rate (q4bT with that token alone changed), same offset.
+    #             Window +1.99 (+0.85/+2.20/+1.86/+3.05); BFCL 31.00, NESTFUL 29.98.
+    # WHAT THE PAIR MEASURES RUNS PARTLY AGAINST US AND IS PRINTED THAT WAY: at 3e-5 the control's
+    # held-out tool use RECOVERS (BFCL 19.38 -> 28.50 against an untrained 29.00), so the 4B
+    # transfer contrast is partly an optimisation-stability result, exactly as it is at 2B. What
+    # survives at both scales is that the aggressive rate is where the in-distribution gain lives
+    # and only the allocator keeps transfer positive there.
+    # 2026-09-06 _fold12: 24 -> 27 by THREE arms, and this is the largest single 4B growth since
+    # the comprehensive grid. Two are the interior points of the SAMPLING-TEMPERATURE DIAL and one
+    # is the 4B rung of the VARIABLE-k PILOT. All three are one-flag arms of a configuration this
+    # paper prints, all three have scorable four-cell windows, and all three acquire printed rows
+    # in tab:negatives, so all three are pinned rather than read outside the correction:
+    #   + q4bTm   q4bTr with --temp 0.3 -> 0.6 (the geometric midpoint of the dial) and no other
+    #             token changed, one seed at the parent's own offset (500). Window +4.28
+    #             (+3.90/+3.90/+5.08/+4.24); BFCL 23.62, NESTFUL 32.13.
+    #   + q4bTm8  the same with --temp 0.85. Window +3.86 (+4.07/+2.37/+4.07/+4.92); BFCL 28.00,
+    #             NESTFUL 32.89.
+    #   + q4bK    q4bT with VARK=1 and no other token changed, one seed at the parent's own offset
+    #             (500), the per-step rollout total pinned to the uniform k=5 spend. Window +4.11
+    #             (+2.88/+4.07/+3.73/+5.76); BFCL 33.12, NESTFUL 29.18.
+    # WHAT THE GROWTH MOVES, measured arm by arm rather than assumed. m 24 -> 27 raises every
+    # pre-existing 4B q and none falls; the movements are
+    #     q4bTr  0.0010 -> 0.0011 (*)   q4bV   0.0027 -> 0.0029 (*)
+    #     q4bV2  0.0865 -> 0.0944       q4bR   0.1470 -> 0.1540
+    #     q4bT2  0.1626 -> 0.1707       q4bTnw 0.1718 -> 0.1808
+    #     q4bTr3 0.2436 -> 0.2571       t4bTbk 0.3413 -> 0.3613
+    # and every other 4B arm was already at 1.000 and stays there. NO PRE-EXISTING VERDICT CROSSES
+    # 0.05 in either direction: the two 4B arms that cleared (per-scale rho q4bTr, VIP's rule on
+    # our bank q4bV) still clear and everything outside stays outside, with q4bV2 the closest at
+    # 0.0944. ONE VERDICT IS NEW AND IT IS AGAINST THE PAPER'S OWN CONVENIENCE: q4bTm ENTERS
+    # STARRED at raw p = 0.000066, q = 0.0017, so the 4B block goes from two starred arms to
+    # three -- and the arm that acquires the star is an arm the pre-registered ship test REJECTS,
+    # on BFCL, at 23.62 against a base of 29.00. An arm can clear this benchmark's correction and
+    # still fail the shipping rule, because the shipping rule is not this benchmark; printing the
+    # star and the rejection together is the only honest way to carry both.
+    # q4bK enters at q = 0.1047 and q4bTm8 at q = 0.4132, so neither of those costs anything but m.
+    "4B": ["q4bD", "q4bF", "q4bF2", "q4bF3e5", "q4bK", "q4bLp", "q4bLp2", "q4bP", "q4bR", "q4bT",
+           "q4bT2",
+           "q4bT3e5", "q4bTiid", "q4bTm", "q4bTm8", "q4bTnw", "q4bV",
+           "q4bV2", "q4bTvip", "q4bTr", "q4bTr2", "q4bTr3", "q4bTrt", "q4bTpe", "q4bTpe2",
+           "q4bTf", "t4bTbk"],
     # 39 arms -- grown from 38 on 2026-08-27 (the comprehensive-grid pass) by ONE arm:
     #   + t8Tf    FAITHFUL published TRACE at 8B: the plug-in rule with NONE of our components
     #             (no warm bank, no certified exclusion, no shrinkage, default temperature, cold
@@ -613,8 +770,53 @@ FAMILY_PIN = {
     #             +0.89 (-0.2/+1.0/+0.8/+1.9, n=590 at every step; solve 12.2) against the full
     #             method's +4.58 at solve 15.9. Removing the bank costs 3.7 pp at 8B, the largest
     #             of the three scales, which is what makes the warm-bank claim a scale claim.
+    # 2026-09-02 FOLD vi: 42 -> 43 by ONE arm, the second the previous entry said would follow.
+    #   + a8Tiid  the SHRINKAGE-CALIBRATION ablation at 8B: a8T3g2 with --warm-shrink group ->
+    #             none and no other recipe flag moved. Window +3.01 (+1.4/+1.9/+4.1/+4.7, n=590
+    #             at every step) against the full method's +4.58 and the warm-bank ablation's
+    #             +0.89, so the ordering full > no-shrink > no-bank that 2B and 4B print holds at
+    #             8B too, and the "w/o shrinkage calibration" row of tab:ablation loses its last
+    #             unmeasured cell. Its own step-15 raw p is 0.268 and its window q is 1.000, so
+    #             the arm it admits carries no claim of its own; what it costs is m.
+    #             m 42 -> 43 moves every 8B q upward and NOTHING crosses 0.05 in either
+    #             direction: the closest pair, a8T3g/a8Tvip at step 15, goes 0.0514 -> 0.0531,
+    #             still outside, and the arms inside stay inside (a8Cu/a8T2n 0.0435 -> 0.0448).
+    # 2026-09-04 _fold10: 43 -> 44 by ONE arm, THE 8B RUNG OF THE BANK LADDER, admitted under the
+    # same membership rule as every other member and not because of what it measures, which runs
+    # against the component the paper prices highest:
+    #   + t8Tbk  FAITHFUL PUBLISHED TRACE AT 8B PLUS OUR WARM BANK: t8Tf with --warm-bank at its
+    #            default and no other flag changed, one seed at the same offset 500 its parent
+    #            ran. It is the 8B counterpart of t2bTbk and t4bTbk and it completes the bank
+    #            ladder at all three scales. Window -0.23 (+0.00/+0.68/-0.90/-0.68, n=590 at
+    #            every step) against the bank-less parent's +3.35 and the full method's +4.58;
+    #            transfer BFCL 37.50 (parent 36.88, base 35.88) and NESTFUL 37.51 (parent 39.07,
+    #            base 38.26, i.e. BELOW the untrained policy). Infrastructure, because this arm
+    #            needed a different one to fit: TP=2, parameter and optimizer offload, eager
+    #            attention, sequence-parallel 2, util 0.29 -- the same list a8Tiid's disclosure
+    #            carries. It has a printed row in tab:ladder2b, so it is pinned rather than read
+    #            outside the correction.
+    # 2026-09-06 _fold12: 44 -> 45 by ONE arm, THE 8B RUNG OF THE SAMPLING-TEMPERATURE DIAL,
+    # admitted under the same membership rule as every other member and printed because of what it
+    # measures, which runs FOR the arm and against the sharpening the 8B history selected:
+    #   + a8Trt  a8Tr with --temp 0.5 -> 1.12 and no other token changed, one seed at the parent's
+    #            own offset (500), TP=2 with parameter and optimizer offload, eager attention and
+    #            sequence-parallel 2 -- the same infrastructure list a8Tiid and t8Tbk carry.
+    #            Window +4.36 (+3.56/+3.05/+5.08/+5.76, n=590 at every step) against the parent's
+    #            +4.25; BFCL 40.75 (parent 35.00, base 35.88) and NESTFUL 41.75 (parent 40.73,
+    #            base 38.26). It is above its parent on all three axes, which is the OPPOSITE of
+    #            what the same one-flag change does at 2B and 4B, and its BFCL cell is the highest
+    #            any arm in this project has recorded on that benchmark. It carries a printed row
+    #            in tab:negatives, so it is pinned rather than read outside the correction.
+    # WHAT THE GROWTH MOVES: m 44 -> 45 raises every pre-existing 8B q and none falls; the
+    # movements are a8T3g2 (<0.0005, unchanged to four places), a8Tr 0.0012 -> 0.0012,
+    # a8F 0.0017 -> 0.0018, a8T5k 0.0024 -> 0.0024, a8Tpe 0.0320 -> 0.0329, a8T2n 0.0799 -> 0.0820
+    # and a8A 0.1231 -> 0.1264, every other 8B arm being already at a q this growth cannot move.
+    # NO VERDICT CHANGES: the same six arms clear 0.05 and the same thirty-nine do not; the closest
+    # pair to the line, a8Tpe inside at 0.0329 and a8T2n outside at 0.0820, both stay on their own
+    # side. a8Trt itself enters at raw p = 0.0079, q = 0.2929, so what it costs is m and nothing
+    # else -- its case is made on the transfer benchmarks, where this family is not the test.
     "8B": ["a8A", "a8A3", "a8Ae0", "a8Auni", "a8Az0", "a8C", "a8Cu", "a8F", "a8Fr", "a8T", "t8Tf",
-           "a8Tnw", "a8Tr", "a8Tvipf",
+           "t8Tbk", "a8Tiid", "a8Tnw", "a8Tr", "a8Trt", "a8Tvipf",
            "a8T2", "a8T2b", "a8T2g1", "a8T2n", "a8T2nr", "a8T2r", "a8T2w", "a8T3", "a8T3g",
            "a8T3g2", "a8T3gr", "a8T4", "a8T5", "a8T5k", "a8T5kr", "a8T6d", "a8Te0", "a8Tlp",
            "a8Tpe", "a8Tvip", "a8Tvipr", "atscfix", "atscfix_lr1e5", "b8plr", "b8plrr", "b8ret",
@@ -649,6 +851,11 @@ def full_family(model="8B"):
         if pin is not None and arm not in pin:
             continue
         per, ps, ns = {}, {}, {}
+        # 2026-09-09 (PI): fig:stepcurve now plots the ABSOLUTE solve rate, so the rate and its
+        # anchor are carried alongside the effect. Both are computed on the SAME intersection the
+        # effect is, which is what makes the two readings reconcile exactly: absr - basr == per.
+        # Nothing here changes `per`, so every table, Holm family and statistic is untouched.
+        absr, basr = {}, {}
         for st in WINDOW:
             cur = load_cell(cell_path(arm, st))
             keys = sorted(set(cur) & set(base))
@@ -657,11 +864,13 @@ def full_family(model="8B"):
             b = sum(1 for k in keys if base[k] and not cur[k])
             c = sum(1 for k in keys if cur[k] and not base[k])
             per[st] = (sum(cur[k] for k in keys) - sum(base[k] for k in keys)) / len(keys)
+            absr[st] = sum(cur[k] for k in keys) / len(keys)
+            basr[st] = sum(base[k] for k in keys) / len(keys)
             ps[st] = mcnemar(b, c)
             ns[st] = len(keys)
         if per:
             rows[arm] = {"per": per, "mean": sum(per.values()) / len(per), "p": max(ps.values()),
-                         "ns": ns}
+                         "ns": ns, "absr": absr, "basr": basr}
     if pin is not None:
         # Loud, not silent: a pinned arm that stops being scorable would shrink m and move every
         # published q downward, which is the same failure as the growth this pin exists to stop.
@@ -967,21 +1176,29 @@ def agg(fam, arms, best=False):
     if best:
         r = fam[sel]
         per = dict(r["per"])
+        absr, basr = dict(r.get("absr", {})), dict(r.get("basr", {}))
         ns = dict(r["ns"])
         mean, sd, cells = r["mean"], None, len(r["per"])
         q = r["q"]
     else:
         per, ns = {}, {}
+        absr, basr = {}, {}
         for st in WINDOW:
             v = [fam[a]["per"][st] for a in got if st in fam[a]["per"]]
             if v:
                 per[st] = sum(v) / len(v)
                 ns[st] = min(fam[a]["ns"][st] for a in got if st in fam[a]["per"])
+                av = [fam[a]["absr"][st] for a in got if st in fam[a].get("absr", {})]
+                bv = [fam[a]["basr"][st] for a in got if st in fam[a].get("basr", {})]
+                if av:
+                    absr[st] = sum(av) / len(av)
+                    basr[st] = sum(bv) / len(bv)
         mean = mean0
         sd = (sum((m - mean) ** 2 for m in ms) / (len(ms) - 1)) ** 0.5 if len(ms) > 1 else None
         cells = min(len(fam[a]["per"]) for a in got)
         q = fam[min(got, key=lambda a: fam[a]["q"])]["q"]
-    return dict(arms=got, per=per, ns=ns, mean=mean, sd=sd, n=len(got), lo=min(ms), hi=max(ms),
+    return dict(arms=got, per=per, absr=absr, basr=basr,
+                ns=ns, mean=mean, sd=sd, n=len(got), lo=min(ms), hi=max(ms),
                 q=q, best=min(got, key=lambda a: fam[a]["q"]), cells=cells,
                 sel=sel, seedmeans=dict(zip(got, ms)), seedmean=mean0, selected=best)
 
@@ -1139,7 +1356,7 @@ CFG_ARMS = {
     # 2026-08-31: the 2B cell is q2bTpe, the registered recipe with --estimator point and no
     # other change. It cost three launches to get (two ran the wrong recipe off a regenerated
     # command, one lost its actors to a missing KEEPCKPT); the arm that banked is the original
-    # original launch command with --jobid and GPU_UTIL changed and nothing else.
+    # gpu023 command with --jobid and GPU_UTIL changed and nothing else.
     "plugin":  {"2B": ["q2bTpe"], "4B": ["q4bTpe", "q4bTpe2"], "8B": ["a8Tpe"]},
     # The sharpened variant is a configuration of the method (tau=0.3 on the sampling weights) and
     # has been a row of tab:ablation since 2026-08-17; the PI's 2026-08-29 directive names it as a
@@ -1308,8 +1525,16 @@ PUBLISHED_ASPUB = [
 # \textsc{Trace} are run as published, without our warm bank") carries it, word for word, under
 # every table that prints those two rows. The label names the method; the note states what we ran.
 # ONE citation per row and no row cites twice: matiisen2020tscl is the TSCL paper (graves2017acl
-# and schaul2016per stay cited in related work, where the ancestry is discussed), and the control
-# row's \citep{shao2024deepseekmath} stays in the note, with the provenance sentence it belongs to.
+# and schaul2016per stay cited in related work, where the ancestry is discussed).
+# 2026-09-02 (PI 03:40): THE UNIFORM CONTROL IS A ROW OF tab:main AND CARRIES ITS CITATION ON THE
+# ROW LIKE EVERY OTHER PUBLISHED RULE. It was named only in the provenance note while it was a
+# Table 2 row; it is the published rule this paper's whole training half is read against, it
+# competes for bold here exactly as the six others do, and a reader of Table 1 alone could not see
+# it. The citation is the one the appendix already used for it.
+# The control's label in tab:main. It is MAIN's own "uniform \\textsc{Grpo}" plus the one word
+# that says what the row is FOR, because tab:main carries no group headers and a role marker
+# costs nothing where a header row would cost a line of page 7. The name is the method's own.
+T1_CONTROL_LABEL = "\\quad uniform \\textsc{Grpo} (control)"
 ROW_CITE = {
     "\\quad \\textsc{Plr}":                "jiang2021plr",
     "\\quad \\textsc{Rag}-\\textsc{Mcp}": "gan2025ragmcp",
@@ -1317,6 +1542,7 @@ ROW_CITE = {
     "\\quad \\textsc{Tscl}":               "matiisen2020tscl",
     "\\quad \\textsc{Vip}":                "nguyen2026vip",
     "\\quad \\textsc{Trace}":              "zou2026trace",
+    T1_CONTROL_LABEL:                      "shao2024deepseekmath",
 }
 
 # 2026-08-29, TABLE-ENRICHMENT PASS (PI: "the two main tables are thin"). Two changes to this
@@ -1372,6 +1598,58 @@ METHOD_EXCLUDE = {
                     " the base policy"},
 }
 
+# =============================================================================================
+# 2026-09-02 (PI 02:40): ONE SELECTION RULE, AND THE RULE IS THAT THERE IS NO SELECTION.
+# tab:main's method row is THE REGISTERED FULL RECIPE at every scale. Flip this to "selected" to
+# restore the per-scale best-configuration row exactly as it stood in _fold6c; nothing else in
+# this file has to move, because every consumer of the method row reads METHOD_SPEC.
+#
+# WHY, AND IT IS THE PAPER'S OWN CLAUSE APPLIED UNIFORMLY RATHER THAN A NEW PREFERENCE. The
+# selection rule excluded a configuration for a MEASURED TRANSFER COLLAPSE (METHOD_EXCLUDE
+# above), and it was stated once and honoured once. Applied at every scale it disqualifies the
+# same configuration the 2B clause disqualified and the 8B row the ladder headed:
+#   2B  per-scale rho  BFCL 9.00 against an untrained 15.12          -6.1 pp   EXCLUDED (as before)
+#   4B  per-scale rho  NESTFUL 11.34 against an untrained 30.79     -19.45 pp  EXCLUDED
+#   8B  sharper weights  BFCL 35.2 v 35.9 and NESTFUL 37.29 v 38.26  below base on BOTH  EXCLUDED
+# What the clause returns at all three scales once it is applied at all three is the full recipe,
+# which is why the row can now be STATED rather than selected: the method row is the registered
+# configuration, the other configurations are reported as measured in the appendix ladder
+# (tab:ladder and tab:framecfg), and no cell of this paper is a maximum over configurations.
+# THE COST IS PRINTED AND IS NOT SMALL: at 4B the row goes +5.2 (q = 0.001) to +3.6 (q = 0.130)
+# and LOSES ITS STAR. At 8B it goes +4.7 (q = 0.002) to +4.6 (q < 0.001) and is stronger, not
+# weaker. At 2B nothing moves, because the rule already returned the full recipe there.
+TABLE1_ROW = "full"          # "full" = the registered recipe; "selected" = the retired rule
+
+# =============================================================================================
+# 2026-09-02 23:05 (PI RULING, taken after both readings were computed and shown): TABLE 1's
+# METHOD ROW IS READ AT ITS OWN BEST CHECKPOINT AND EVERY OTHER ROW STAYS ON THE WINDOW MEAN.
+#
+# WHAT THE FLAG DOES. When it is True the \methodname{} row of tab:main -- and only that row --
+# is read at the checkpoint of {15,20,25,30} where its OWN SOLVE RATE is highest, and all three
+# of its cells (solve, invalid, turns) are read at that same checkpoint, so the row is internally
+# one checkpoint rather than one column of one convention beside two of another. Every other row,
+# and the untrained base row (which has no checkpoint at all), is unchanged.
+#
+# THE STEP IS CHOSEN HERE, BY CODE, AND PRINTED INTO THE FLOAT'S NOTE AND INTO THE AUDIT BLOCK.
+# No step number is typed anywhere in the paper: if a later checkpoint lands, or a cell is
+# rescored, the selected step and every number the note quotes move at the next emission.
+#
+# WHAT MAKES IT SAFE, AND IT IS STATED IN THE NOTE RATHER THAN LEFT HERE:
+#  (1) The ordering does not depend on the asymmetry. Read EVERY row at its own best checkpoint
+#      and the method still leads at all three scales; the emitter computes that symmetric
+#      reading and writes its three comparisons into the note.
+#  (2) The window mean stays the pre-registered readout, tab:mainsteps still prints all four
+#      steps and the window mean for every row of this float, and the note points there.
+#  (3) tab:main CARRIES NO STARS AND NO p, so no significance statement is read at a selected
+#      step. tab:configs, tab:mainfull, tab:mainsteps, both transfer tables and every Holm
+#      family stay on the window statistic and are untouched by this flag.
+#  (4) The selection is worth something and the emitter measures it rather than asserting it is
+#      small: the mean uplift of best-of-four-correlated-steps over the window mean, taken over
+#      every competing row of this float, is printed in the audit block and quoted in
+#      app:tableconv beside the best-of-n seed figure.
+T1_METHOD_BEST_STEP = True
+T1_METHOD_LABEL = "\\quad \\methodname{}"
+
 
 def select_method_cfg(model, fam=None):
     """The configuration key tab:main's method row carries at `model`, by the rule above."""
@@ -1407,7 +1685,8 @@ class _MethodSpec(dict):
 
     def get(self, model, default=None):
         if model not in self:
-            dict.__setitem__(self, model, CFG_ARMS[select_method_cfg(model)][model])
+            key = "fixed" if TABLE1_ROW == "full" else select_method_cfg(model)
+            dict.__setitem__(self, model, CFG_ARMS[key][model])
         return dict.get(self, model, default)
 
     def __getitem__(self, model):
@@ -1465,9 +1744,18 @@ BASE_ROW = "@BASE"
 # published (TRACE, VIP). It is NOT by year and NOT by any measured value; MAIN's own published
 # block keeps the order it has always had, which is why tab:mainfull's rows are in that order and
 # these are in this one.
+# 2026-09-02 (PI 03:40): THE UNIFORM CONTROL IS THE LAST ROW. It is a published rule
+# \citep{shao2024deepseekmath} and it is read here on the same window, the same anchors, the same
+# pinned families and the same best-seed rule as every other row -- CONTROL_ARMS, the dict
+# tab:configs' control row reads, so the two floats cannot name one arm set and print another. It
+# COMPETES FOR BOLD: it is not a reference row, and the base row remains the only row excluded.
+# It goes AFTER the published block rather than under the base row because the base row and the
+# control are not two references: the base row is what every effect in the paper is measured
+# against, and the control is a rule that is being compared.
 T1ROWS = ([("", "\\quad untrained base policy", BASE_ROW),
            ("", "\\quad \\methodname{}", METHOD_SPEC)]
-          + [("", lab, spec) for lab, spec in PUBLISHED_REIMPL + PUBLISHED_ASPUB[::-1]])
+          + [("", lab, spec) for lab, spec in PUBLISHED_REIMPL + PUBLISHED_ASPUB[::-1]]
+          + [("", T1_CONTROL_LABEL, CONTROL_ARMS)])
 # Table 2's rows: the framework's other configurations in CFG_ORDER, then the control. Same
 # dicts, same best-seed rule and same pinned families as every other float that reads them.
 # --- TABLE 2 IS THE ABLATION STUDY (PI 21:55: "where is ablation study? is it table 2? then
@@ -1483,8 +1771,9 @@ T1ROWS = ([("", "\\quad untrained base policy", BASE_ROW),
 # this pass -- so printing them here grows no family, moves no m and changes no published q. They
 # are the paper's two most load-bearing ablations (the bank is priced at -2.0pp at 2B in
 # tab:coadapt2b) and an ablation table without them would be an odd thing to publish.
-# Their coverage is real and disclosed: the bank ablation was never run at 8B, the shrinkage
-# ablation only at 2B, and those cells print the coverage dash rather than a substitute.
+# Their coverage was real and disclosed while it was partial: the bank ablation had no 8B cell and
+# the shrinkage ablation only a 2B one, and those cells printed the coverage dash rather than a
+# substitute. Both are complete at all three scales as of 2026-09-02 and neither prints a dash.
 # 2026-08-31: both removal rows were pre-registered to all three scales on 2026-08-29 22:25 as
 # single-seed arms differing from their scale's full-method recipe by ONE launch flag, and the
 # diffs were verified against slurm/supervisor.sh rather than against the registry's names.
@@ -1528,7 +1817,7 @@ T1ROWS = ([("", "\\quad untrained base policy", BASE_ROW),
 # this row is printed.
 ABL_ARMS = {
     "nobank":  {"2B": ["q2bTnw"], "4B": ["q4bTnw"], "8B": ["a8Tnw"]},
-    "noshrink": {"2B": ["q2bTiid"], "4B": ["q4bTiid"], "8B": NOT_RUN},
+    "noshrink": {"2B": ["q2bTiid"], "4B": ["q4bTiid"], "8B": ["a8Tiid"]},
 }
 # ORDER, and it is the ablation idiom's order, not a ranking: the full method, then the removals,
 # then the replacements, then the allocation itself removed.
@@ -1539,14 +1828,20 @@ ABL_ARMS = {
 # here by restoring one line the moment its missing cell exists:
 #   sharp     8B only, and at 2B/4B it IS the full method, so its cells there were never an
 #             ablation at all. It stays in the appendix as the 8B variant it is.
-# 2026-08-31 (FOLD v): THREE of the four rows held out on 2026-08-29 come back, each because its
+# 2026-08-31 (FOLD v): TWO of the four rows held out on 2026-08-29 come back, each because its
 # missing cell now exists and for no other reason. w/o warm bank was waiting on a8Tnw (banked
-# 07:00 today), the plug-in row on q2bTpe (banked 08-30), and w/o shrinkage calibration on
-# q4bTiid and a8Tiid. The rule the float was built under is unchanged and is what admits them:
-# a row prints here only when every one of its three cells is measured.
+# 07:00 today) and the plug-in row on q2bTpe (banked 08-30). w/o shrinkage calibration had
+# q4bTiid by then but not a8Tiid, so its line stayed commented out rather than printing a 4B/2B
+# row with an 8B dash.
+# 2026-09-02 (FOLD vi): the shrinkage row comes back, and it is the last of the four. a8Tiid
+# banked its fourth window cell 00:18 today (590 rows at each of 15/20/25/30, verified by row
+# count before this line was restored), so all three of that row's cells are measured and the
+# rule the float was built under -- a row prints here only when every one of its three cells is
+# measured -- admits it without being bent. The one row still held out is `sharp`, which is not
+# an ablation at 2B/4B at all.
 ABLROWS = ([("@FULL", "\\methodname{} (full)", CFG_ARMS["fixed"]),
             ("", ABL_LABEL["nobank"], ABL_ARMS["nobank"]),
-            # ("", ABL_LABEL["noshrink"], ABL_ARMS["noshrink"]),   # a8Tiid still training
+            ("", ABL_LABEL["noshrink"], ABL_ARMS["noshrink"]),
             ("", ABL_LABEL["plugin"], CFG_ARMS["plugin"]),
             ("", ABL_LABEL["refit"], CFG_ARMS["refit"]),
             ("", ABL_LABEL["vipbank"], CFG_ARMS["vipbank"]),
@@ -1618,10 +1913,101 @@ MAIN_SCALES = ["2B", "4B", "8B"]
 MAIN_STEP = 15
 
 # --- Table: our own measured negatives, moved to the appendix ---------------------------------
-NEGATIVES = [("adaptive surface (v1)", ["a8A"]),
-             ("\\textsc{Elsa}", ["a8A3"]),
-             ("\\textsc{Accord} (certified dense shaping)", ["a8C"]),
-             ("group size $k{=}2$ (falsified axis)", ["a8T4"])]
+# 2026-09-03 _fold7h: THIS FLOAT GAINS THE TWO TEMPERATURE ARMS, and gains a model column with
+# them, because they are 2B and 4B arms and every row above is 8B. A row is read against ITS OWN
+# scale's base anchor and corrected inside ITS OWN scale's pinned family -- the same discipline
+# tab:ladder2b's 4B rung is read under -- so the third entry of each tuple is the model and the
+# emitter looks the family up rather than sharing one. Both arms are measured negatives in the
+# strict sense this table means: each is one flag away from a configuration this paper prints,
+# each is below the configuration it came from, and neither is a shipped recipe at any scale.
+#
+# 2026-09-06 _fold12: THE FLOAT GAINS FIVE MORE ROWS AND A SECOND BLOCK HEADER, and with them it
+# stops being a table of negatives only. Three of the five ARE negatives in the strict sense above
+# (the two interior dial points at 4B and the 2B variable-k rung); two ARE NOT, and saying so is
+# the point of the block headers and of the caption:
+#   * a8Trt, the dial's 8B rung, is ABOVE its parent on all three axes. It is here because it is
+#     the same one-flag construction as the rows around it, not because it failed; a dial printed
+#     at the scale where it falls and hidden at the scale where it rises is not a dial.
+#   * q4bK, the 4B variable-k rung, is above its parent AND above the shipped recipe's best seed
+#     in-window, with BFCL above base and NESTFUL 1.6 under it.
+# The block headers name what each block IS rather than what it cost, and the caption carries the
+# reading. Every row is still one flag from a configuration this paper prints, still read against
+# its own scale's anchor, and still corrected inside its own scale's pinned family.
+NEGATIVES = [("", "adaptive surface (v1)", ["a8A"], "8B"),
+             ("", "\\textsc{Elsa}", ["a8A3"], "8B"),
+             ("", "\\textsc{Accord} (certified dense shaping)", ["a8C"], "8B"),
+             ("", "group size $k{=}2$ (falsified axis)", ["a8T4"], "8B"),
+             ("@HDR", "\\emph{The sampling temperature moved on the per-scale $\\rho$"
+                      " configuration}", None, None),
+             ("", "\\quad at $2$B, $\\tau{=}1.12$", ["q2bTrt"], "2B"),
+             ("", "\\quad at $4$B, $\\tau{=}0.60$", ["q4bTm"], "4B"),
+             ("", "\\quad at $4$B, $\\tau{=}0.85$", ["q4bTm8"], "4B"),
+             ("", "\\quad at $4$B, $\\tau{=}1.12$", ["q4bTrt"], "4B"),
+             ("", "\\quad at $8$B, $\\tau{=}1.12$", ["a8Trt"], "8B"),
+             ("@HDR", "\\emph{The group size freed across tasks under one budget}", None, None),
+             ("", "\\quad at $2$B", ["q2bK2"], "2B"),
+             ("", "\\quad at $4$B", ["q4bK"], "4B")]
+
+# THE SAMPLING-TEMPERATURE DIAL, one entry per measured point per scale, lowest tau first. THE
+# LOWEST POINT OF EACH SCALE IS ALREADY PRINTED ELSEWHERE -- it is the "per-scale rho" row of
+# tab:configs, tab:mainfull and tab:transfermain -- so this registry names every point and the
+# emitter computes the curve rather than letting a number be typed twice. tau is the only token
+# that differs between consecutive points of one scale (checked at launch, launch command by
+# launch command), and every member ran at seed offset 500, so each contrast is one flag at one
+# offset.
+#
+# THE REGISTERED VALUE IS THE FIRST ENTRY OF EACH LIST AND IT IS NOT THE SAME NUMBER AT EVERY
+# SCALE: tau = 0.3 at 2B and 4B, tau = 0.5 at 8B, which is what Algorithm 1 prints and what the
+# configuration grid says row by row. A "dial" quoted as one curve across scales would be three
+# different contrasts averaged, so the emitter keeps the scales apart and the note names each
+# scale's own starting point.
+TEMP_DIAL = {"2B": [(0.30, "q2bTr"), (1.12, "q2bTrt")],
+             "4B": [(0.30, "q4bTr"), (0.60, "q4bTm"), (0.85, "q4bTm8"), (1.12, "q4bTrt")],
+             "8B": [(0.50, "a8Tr"), (1.12, "a8Trt")]}
+
+# THE UNTRAINED ANCHOR, PER BENCHMARK, because the two benchmarks scored the 8B base policy into
+# differently named run directories (BFCL's is run_base and NESTFUL's is run_base8b -- see
+# bfcl_records.SCALES against nestful_records.SCALES) and a single map would silently read one
+# scale's anchor off a directory that does not exist. The same fact is already recorded at
+# DUR_BFCL_BASE and at the transfer emitter's own base registry; this is the third and last use.
+BFCL_BASE = {"2B": "base2b", "4B": "base4b", "8B": "base"}
+NEST_BASE = {"2B": "base2b", "4B": "base4b", "8B": "base8b"}
+
+# THE PRE-REGISTERED SHIP TEST for a 4B dial point, written down before any of the four ran: a
+# point ships only if it beats the shipped 4B recipe's window AND is at or above the untrained 4B
+# policy on BOTH transfer benchmarks. The emitter evaluates it rather than the prose asserting it.
+SHIP_TEST_4B = dict(win_ref="q4bT2", bases=("base4b", "base4b"))
+
+# THE VARIABLE-k PILOTS. One flag (VARK=1) from their fixed-k parents, same seed offset, and the
+# per-step rollout total pinned to the uniform k=5 spend so the pilot is budget-matched rather
+# than budget-freed. The per-cycle histogram of k is READ OFF THE RUN LOG rather than transcribed:
+# a histogram typed into a caption is a number with no record behind it, and this one carries the
+# paper's answer to whether a calibrated level, freed to act, acts.
+VARK_PILOTS = [("2B", "q2bT", "q2bK2"), ("4B", "q4bT", "q4bK")]
+VARK_LOG = R + "/logs/rl_%s.log"
+_VARK_RE = re.compile(r"\[triage\] vark: (\d+) rows in \d+ blocks of \d+; "
+                      r"k histogram \{([^}]*)\}; sum k = (\d+)")
+
+
+def vark_cycles(arm):
+    """[(n_rows, {k: count}, sum_k)] per training cycle, from that arm's own run log.
+
+    The log line is written by the allocator at the moment it builds the cycle's parquet, so it is
+    the allocation itself and not a reconstruction of it. Cycles are returned in the order they
+    were logged.
+    """
+    out = []
+    try:
+        text = open(VARK_LOG % arm, errors="ignore").read()
+    except Exception:
+        return out
+    for m in _VARK_RE.finditer(text):
+        hist = {}
+        for part in m.group(2).split(","):
+            k, v = part.split(":")
+            hist[int(k.strip())] = int(v.strip())
+        out.append((int(m.group(1)), hist, int(m.group(3))))
+    return out
 
 # --- Table: the ablation study, as component attribution --------------------------------------
 # Restructured 2026-08-17 from a chronological "configuration ladder". The ladder recorded the
@@ -1660,10 +2046,52 @@ ABLATION = [
 # Holm correction (full_family("2B")), so the multiplicity cost of running it is charged same as
 # every other 2B arm.
 FULL_METHOD_2B = ["q2bT"]
+# 2026-09-01 _fold6: THE LADDER GAINS ITS MIRROR IMAGE. Every row above removes a component from
+# our method; the two rows below ADD one of them -- our warm bank, and only that -- to a published
+# rule, which is the only construction that prices the bank separately from the allocation rule it
+# is bundled with. t2bTbk is t2bTf with --warm-bank at its default and no other change, one seed at
+# the parent's own offset (500), so the pair differs by that one flag and by nothing else. Both are
+# members of the 2B Holm family; neither is a row of Table 1, which keeps the published rules as
+# their papers run them.
 ABLATION2B = [
     ("@FULL", "\\textbf{Full method} (\\methodname{})", FULL_METHOD_2B),
     ("", "\\quad $-$ warm bank", ["q2bTnw"]),
-    ("", "\\quad $-$ calibration (independent shrinkage)", ["q2bTiid"])]
+    ("", "\\quad $-$ calibration (independent shrinkage)", ["q2bTiid"]),
+    ("@HDR", "\\emph{The same component added to a published rule}", None),
+    ("", "\\quad \\textsc{Trace}, as published (no bank)", ["t2bTf"]),
+    ("", "\\quad \\textsc{Trace} $+$ our warm bank", ["t2bTbk"])]
+
+# 2026-09-02 _fold7c: THE BANK LADDER GETS ITS SECOND SCALE, AND THAT IS THE WHOLE POINT OF IT.
+# The 2B rung above is the reviewer's construction and at 2B it goes against us, so a single-scale
+# answer to a confound is not an answer. t4bTbk is q4bTf with --warm-bank at its default and no
+# other flag changed, one seed at the same offset 500 its parent ran -- the exact construction
+# t2bTbk is at 2B, one scale up.
+#
+# THE REFERENCE THE DELTA IS READ AGAINST IS OFFSET-MATCHED, which is this table's own pairing
+# rule and not a choice made after the numbers existed. At 2B the full method's offset-500 seed
+# (q2bT) also happens to be its best seed, so the rule and tab:main's printed row agree there and
+# the question never arose. At 4B they do NOT agree: the offset-500 seed is +2.5 and the other
+# seed, the one tab:main prints as the 4B \methodname{} row, is +3.6. The delta below is against
+# the offset-matched seed, because a delta against the other one would confound the warm bank with
+# a different surface draw -- the same reason every removal row in this table is pinned to an
+# offset. BOTH readings are printed: the note carries the best seed's window, so a reader sees
+# that this rung sits BETWEEN the full method's two 4B seeds and can check either comparison.
+LADDER_FULL_4B = ["q4bT"]
+LADDER_BANK_4B = ("\\quad \\textsc{Trace} $+$ our warm bank, at $4$B", ["t4bTbk"])
+
+# 2026-09-04 _fold10: THE LADDER REACHES THE HEADLINE SCALE, AND THERE IT REVERSES.
+# t8Tbk is t8Tf with --warm-bank at its default and no other flag changed, one seed at the same
+# offset 500 its parent ran -- the identical construction at 8B. With the two rungs above it the
+# reviewer's bank-confound question is now answered by measurement at every scale this paper
+# trains, which is the only form of answer a confound accepts.
+#
+# THE OFFSET-MATCHED REFERENCE AT 8B IS a8T3g AND NOT THE ROW Table~1 PRINTS. a8T3g carries seed
+# offset 500 (supervisor.sh), which is t8Tf's and t8Tbk's; a8T3g2, the seed tab:main prints, is
+# offset 2500. The delta below is against the offset-matched seed for the same reason the 4B rung
+# is -- a delta against a different surface draw would confound the warm bank with the draw -- and
+# the note carries the reading against tab:main's seed as well, so both are printed.
+LADDER_FULL_8B = ["a8T3g"]
+LADDER_BANK_8B = ("\\quad \\textsc{Trace} $+$ our warm bank, at $8$B", ["t8Tbk"])
 
 # --- Table: pool-matched robustness, on DAPO's own training pool -------------------------------
 # Added 2026-08-18 (PLAN_TRIAGE.md 2026-08-18 01:55 amendment, executed 16:50). Table~\ref{tab:mech}
@@ -1714,6 +2142,28 @@ LR_BASE = "base2b"
 # The other corrected uniform seeds at 1e-4 and the other method seed, printed to stdout and
 # quoted in the caption so the single-seed rungs are bounded by the seeds that exist.
 LR_CONTEXT = {"uniform 1e-4, other seeds": ["q2bF6", "q2bF7"], "TRIAGE 1e-4, other seed": ["q2bT2"]}
+
+# 2026-09-04 _fold10: THE LEARNING-RATE LADDER GETS ITS SECOND SCALE, AND THE READOUT WAS FIXED
+# BEFORE EITHER ARM RAN (logs/.lr_rung_after_candidates.sh header, quoted in PLAN_TRIAGE.md
+# 2026-09-04 18:15). Same construction as the 2B block: one run per rung at seed offset 500, the
+# rungs differing from each other by the learning-rate token alone, read against the 4B anchor and
+# corrected inside the 4B family.
+#
+# THE PRE-REGISTERED READING FIRED ON ITS FIRST CLAUSE AND IT RUNS PARTLY AGAINST US. At 3e-5 the
+# uniform control's held-out tool use RECOVERS -- BFCL 19.38 -> 28.50 against an untrained 29.00,
+# i.e. back to base within a single run -- so the 4B transfer headline is partly an
+# optimisation-stability result and the paper says so at 4B exactly as it does at 2B. What is
+# measured at BOTH scales after this rung: at the aggressive rate, where the in-distribution gain
+# lives, uniform allocation destroys held-out tool use (-10.6 pp at 2B, -9.6 at 4B) while the
+# method gains (+1.5 and +5.1); at the safe rate the control returns to base with no gain while
+# the method still sits above base on BFCL (+2.0 at 4B) with a softened window (+1.99 v +2.46).
+# The 2B block prints the same structure one scale down, which is why the two are one float.
+LR_LADDER_4B = [("uniform \\textsc{Grpo}", "$3\\times10^{-5}$", "q4bF3e5"),
+                ("uniform \\textsc{Grpo}", "$10^{-4}$", "q4bF"),
+                ("\\methodname{}", "$3\\times10^{-5}$", "q4bT3e5"),
+                ("\\methodname{}", "$10^{-4}$", "q4bT")]
+LR_BASE_4B = "base4b"
+LR_HDR_4B = "\\emph{The same two rates at $4$B, one run per rung at the same offset}"
 
 # --- Table: group-size sensitivity at 2B ------------------------------------------------------
 # Added 2026-08-22. Same construction as the LR ladder and the same caveat structure: one run per
@@ -2289,17 +2739,35 @@ def emit_tables(outdir):
         """
         return lab.replace("\\textbf{", "\\textit{", 1)
 
+    # The three family sizes are READ OFF FAMILY_PIN rather than typed here. They were typed here
+    # until 2026-09-02, and by then the 2B count in this header was one arm stale (t2bTbk grew that
+    # family on 2026-09-01 and only the per-table scale headers, which are computed, followed it),
+    # which is the drift this whole header exists to warn about.
     GEN = ("% generated by surface/verl_rl/paper_numbers.py --emit-tables; do not edit by hand\n"
            "% Holm family membership is PINNED in paper_numbers.FAMILY_PIN, not taken from the\n"
            "% live glob: the fleet keeps training, and an arm that banks its first cell after a\n"
            "% table ships would raise m and move published q values with nothing about the paper\n"
-           "% having changed. The pinned families are 26 / 20 / 42 arms at 2B / 4B / 8B, grown\n"
+           f"% having changed. The pinned families are {len(FAMILY_PIN['2B'])} /"
+           f" {len(FAMILY_PIN['4B'])} / {len(FAMILY_PIN['8B'])} arms at 2B / 4B / 8B, grown\n"
            "% deliberately on 2026-08-22 (six arms), on 2026-08-24 (three 4B arms), in the final\n"
            "% fold of 2026-08-24 (one 8B arm, b8plrr), on 2026-08-27, the comprehensive-grid\n"
            "% pass, by five 4B arms (q4bV2, q4bTvip, q4bTr, q4bTr2, q4bTpe) and one 8B arm (t8Tf)\n"
-           "% -- which is why every 4B and 8B q moved in that pass and no 2B q did -- and on\n"
+           "% -- which is why every 4B and 8B q moved in that pass and no 2B q did -- on\n"
            "% 2026-08-29 by the three FAITHFUL published arms whose windows completed overnight:\n"
-           "% q2bVf and t2bTf at 2B (20 -> 22) and a8Tvipf at 8B (40 -> 41). Each growth is\n"
+           "% q2bVf and t2bTf at 2B (20 -> 22) and a8Tvipf at 8B (40 -> 41), on 2026-08-31 by the\n"
+           "% two removal ablations (a8Tnw at 8B, 41 -> 42) and on 2026-09-01/02 by t2bTbk at 2B\n"
+           "% (26 -> 27) and a8Tiid at 8B (42 -> 43), and on 2026-09-02 by t4bTbk at 4B\n"
+           "% (20 -> 21), which is why every 4B q moved in that pass, and on 2026-09-03 by the\n"
+           "% two natural-temperature arms q2bTrt at 2B (27 -> 28) and q4bTrt at 4B (21 -> 22),\n"
+           "% which is why every 4B q moved again and no 2B q did, and on 2026-09-04 by the two\n"
+           "% learning-rate rungs at 4B (q4bF3e5, q4bT3e5; 22 -> 24) and by the 8B rung of the\n"
+           "% bank ladder (t8Tbk; 43 -> 44), which is why every 4B and every 8B q moved in that\n"
+           "% pass and no 2B q did, and on 2026-09-06 by the two interior points of the sampling-\n"
+           "% temperature dial and the variable-k pilot at 4B (q4bTm, q4bTm8, q4bK; 24 -> 27), by\n"
+           "% that pilot's 2B rung (q2bK2; 28 -> 29) and by the dial's 8B rung (a8Trt; 44 -> 45),\n"
+           "% which is why every 4B and every 8B q moved again in that pass and no 2B q did -- and\n"
+           "% why the 4B block gained a third starred arm, q4bTm at 0.0017, an arm the\n"
+           "% pre-registered ship test rejects on BFCL. Each growth is\n"
            "% enumerated arm by arm and q by q in FAMILY_PIN's comment and in CHANGES.md. Arms\n"
            "% held out of a family are named in FAMILY_PIN's own comment and not here, because no\n"
            "% unshipped arm tag belongs in a .tex file.\n"
@@ -2531,7 +2999,7 @@ def emit_tables(outdir):
         " $\\tau{=}0.3$), so the row's cells there are that row's, and no separate arm was"
         " trained to print them twice.",
         ("Anchors $n=%d$, $%d$, $%d$; Holm families of $%d$, $%d$ and $%d$ arms, never merged."
-         " Mean turns at step $15$: Table~\\ref{tab:mainabs}. The seed-mean view of these"
+         " The seed-mean view of these"
          " configurations was withdrawn from this version: Appendix~\\ref{app:movedseeds}."
          % (fams["2B"][1], fams["4B"][1], fams["8B"][1],
             fams["2B"][2], fams["4B"][2], fams["8B"][2]))
@@ -2591,6 +3059,7 @@ def emit_tables(outdir):
     #  (3) TIES ARE BOLDED TOGETHER, compared at the ONE DECIMAL THE CELL PRINTS. Two cells that
     #      print the same number may not be typeset as though one beat the other.
     t1cell, idxcount = {}, {m: Counter() for m in MAIN_SCALES}
+    t1keys, t1agg = {}, {}
     for kind, lab, spec in T1ROWS:
         if spec is BASE_ROW:
             continue
@@ -2598,14 +3067,17 @@ def emit_tables(outdir):
             a = agg(fams[model][0], spec.get(model), best=True)
             if a is None:
                 raise SystemExit("tab:main: %r has no rankable seed at %s" % (lab, model))
-            rates, brates = [], []
+            rates, brates, kss = [], [], []
             for st in WINDOW:
                 r, br, ks = _paired(a["sel"], st, bases[model])
                 if r is None:
                     continue
                 rates.append(r)
                 brates.append(br)
+                kss.append(ks)
                 idxcount[model][ks] += 1
+            t1keys[(model, lab)] = kss
+            t1agg[(model, lab)] = a
             if len(rates) != len(a["per"]):
                 raise SystemExit("tab:main: %r at %s averages %d steps but its window is %d -- "
                                  "the rate column and the effect column would not be the same "
@@ -2628,15 +3100,137 @@ def emit_tables(outdir):
                                  "columns -- this float prints no coverage markers, so a hole "
                                  "here is a refusal" % (lab, model))
             t1cell[(model, lab)] = (win, inv, turns)
+
+    # ---- A ROW WHOSE OWN INDEX WOULD MOVE THE BASE ROW IS READ ON THE SHARED INDEX ------------
+    # 2026-09-02 (PI 03:40), and this is a SECOND CHECK, not a relaxed first one. Every guard
+    # below still runs and still refuses; what this pass adds is a rule for the one situation the
+    # guard below was written to catch, stated here rather than left to a crash.
+    #
+    # THE SITUATION, MEASURED AND NOT HYPOTHETICAL. The 8B anchor is 1,180 task-seed pairs (295
+    # held-out tasks at four evaluation seeds). Almost every 8B arm in this float was evaluated on
+    # two of those seeds, so its paired index is 590 and that is this table's shared index. Two
+    # rows have more. The full recipe's 8B arm covers all four seeds COMPLETELY at all four window
+    # steps, and the anchor reads the same 11.4 / 6.8 / 9.6 on 1,180 as on 590, so the base row is
+    # that row's reference and the row is printed on its own index. The uniform control's 8B arm
+    # covers all four seeds at step 15 and only PART of the two extra seeds at steps 20, 25 and
+    # 30, and on those partial indices the anchor reads 11.7-11.8 rather than 11.4. Its own-index
+    # rate is therefore a rate on an easier task set than the eight rows printed beside it, and
+    # the base row above it is not its reference.
+    #
+    # THE RULE, WHICH IS THE GUARD'S OWN CRITERION TURNED INTO A READING. A row is read on its own
+    # paired index, unless that index would make the printed base row wrong at the one decimal
+    # this float prints; then the row is read on the table's shared index, where the base row IS
+    # its reference and where it is read on exactly the tasks the rows beside it are read on. The
+    # emitter refuses if the row does not cover the whole shared index at every window step, so
+    # this can never quietly substitute a smaller cell. What it costs is stated on the page: such
+    # a row's window effect on the shared index is not the statistic of record printed for it in
+    # tab:configs and tab:mainfull, which stays that arm's own-index effect, and the emitter
+    # writes BOTH readings into this file's header comments and into the note.
+    t1shared = {}
+    _anchcache = {}
+
+    def _anchor_row(model, keys):
+        # The base row's three printed cells, at the printed precision, on one key set.
+        kk = (model, keys)
+        if kk not in _anchcache:
+            sub = {k: bases[model][k] for k in keys}
+            r = 100.0 * sum(sub.values()) / len(sub)
+            i, t = window_costs(BASE_CELLS[model], sub, steps=[None])
+            if i is None:
+                raise SystemExit("tab:main: the %s anchor has no cost columns on an index of %d"
+                                 % (model, len(keys)))
+            _anchcache[kk] = (round(r, 1), round(i, 1), round(t, 1))
+        return _anchcache[kk]
+
+    for model in MAIN_SCALES:
+        ks0 = idxcount[model].most_common(1)[0][0]
+        for kind, lab, spec in T1ROWS:
+            if spec is BASE_ROW:
+                continue
+            kss = t1keys[(model, lab)]
+            moved = False
+            for k in kss:
+                if len(k) <= len(ks0):
+                    continue
+                if not (ks0 <= k):
+                    raise SystemExit("tab:main: at %s %r is read on a larger index that does not "
+                                     "contain the modal one -- the base row would not be that "
+                                     "row's reference" % (model, lab))
+                if _anchor_row(model, k) != _anchor_row(model, ks0):
+                    moved = True
+            if not moved:
+                continue
+            a = t1agg[(model, lab)]
+            rb = {k: bases[model][k] for k in ks0}
+            rates, brates, kss2 = [], [], []
+            for st in WINDOW:
+                r, br, k2 = _paired(a["sel"], st, rb)
+                if r is None:
+                    raise SystemExit("tab:main: %r at %s has no scorable cell on the shared index"
+                                     % (lab, model))
+                if k2 != ks0:
+                    raise SystemExit("tab:main: %r at %s covers %d of the shared index's %d pairs "
+                                     "at step %d -- it cannot be read there"
+                                     % (lab, model, len(k2), len(ks0), st))
+                rates.append(r)
+                brates.append(br)
+                kss2.append(k2)
+            if len(rates) != len(a["per"]):
+                raise SystemExit("tab:main: %r at %s averages %d steps on the shared index but its "
+                                 "window is %d" % (lab, model, len(rates), len(a["per"])))
+            win2 = sum(rates) / len(rates)
+            got2 = win2 - sum(brates) / len(brates)
+            inv2, turns2 = window_costs(a["sel"], rb)
+            if inv2 is None:
+                raise SystemExit("tab:main: %r at %s has no cost columns on the shared index"
+                                 % (lab, model))
+            for k in kss:
+                idxcount[model][k] -= 1
+                if idxcount[model][k] <= 0:
+                    del idxcount[model][k]
+            for k in kss2:
+                idxcount[model][k] += 1
+            t1shared[(model, lab)] = (t1cell[(model, lab)][0], 100.0 * a["mean"], len(ks0),
+                                      win2, got2)
+            t1cell[(model, lab)] = (win2, inv2, turns2)
+            print("  [tab:main] %s %s read on the shared index (n=%d): %.2f / %+.2f, against "
+                  "%.2f / %+.2f on its own pairs"
+                  % (model, lab.replace("\\quad ", ""), len(ks0), win2, got2,
+                     t1shared[(model, lab)][0], t1shared[(model, lab)][1]))
     # THE SHARED INDEX, computed and not chosen: the modal paired key set of this table's rows.
-    # It must also be the largest, and it must be the index a clear majority of the cells are
-    # read on, or the base row would be a rate on a task set most of the table is not read on.
-    baserow, basen = {}, {}
+    # It must be the index a clear majority of the cells are read on, or the base row would be a
+    # rate on a task set most of the table is not read on.
+    #
+    # 2026-09-02: THE "MODAL MUST ALSO BE THE LARGEST" TEST IS REPLACED BY THE TEST IT WAS
+    # STANDING IN FOR, because the full recipe's 8B arm is scored on the whole 1,180-task held-out
+    # set where every other row of this float is scored on 590 of them. The concern that test
+    # names is real -- a base row read on a SUBSET of a row above it is not that row's reference --
+    # and it is now checked directly rather than by a proxy on set sizes: any index larger than
+    # the modal one must CONTAIN it, and the base row it would produce must be identical to the
+    # printed one at the one decimal this float prints. Both hold at 8B (590 is a subset of 1,180;
+    # the base row is 11.4 / 6.8 / 9.6 on either), so no digit of the base row depends on the
+    # choice. If either ever fails the emitter stops, as before.
+    baserow, basen, sharedidx = {}, {}, {}
     for model in MAIN_SCALES:
         ks, n = idxcount[model].most_common(1)[0]
-        if len(ks) != max(len(k) for k in idxcount[model]):
-            raise SystemExit("tab:main: at %s the modal paired index is not the largest -- the "
-                             "base row would be read on a subset of the rows above it" % model)
+        for other in idxcount[model]:
+            if len(other) <= len(ks):
+                continue
+            if not (ks <= other):
+                raise SystemExit("tab:main: at %s a row is read on a larger index that does not "
+                                 "contain the modal one -- the base row would not be that row's "
+                                 "reference" % model)
+            r0 = 100.0 * sum(bases[model][k] for k in ks) / len(ks)
+            r1 = 100.0 * sum(bases[model][k] for k in other) / len(other)
+            i0, t0 = window_costs(BASE_CELLS[model],
+                                  {k: bases[model][k] for k in ks}, steps=[None])
+            i1, t1 = window_costs(BASE_CELLS[model],
+                                  {k: bases[model][k] for k in other}, steps=[None])
+            if any(round(x, 1) != round(y, 1)
+                   for x, y in ((r0, r1), (i0, i1), (t0, t1))):
+                raise SystemExit("tab:main: at %s the base row differs at the printed precision "
+                                 "between the modal index (%d) and a larger one (%d)"
+                                 % (model, len(ks), len(other)))
         if 2 * n <= sum(idxcount[model].values()):
             raise SystemExit("tab:main: at %s no paired index is shared by most cells" % model)
         bt = cell_turns(BASE_CELLS[model])
@@ -2654,20 +3248,104 @@ def emit_tables(outdir):
             raise SystemExit("tab:main: the %s anchor has no cost columns" % model)
         baserow[model] = "$%.1f$ & $%.1f$ & $%.1f$" % (r, binv, bturns)
         basen[model] = len(ks)
+        sharedidx[model] = ks
     if len(set(basen.values())) != 1:
         raise SystemExit("tab:main: the shared held-out index differs by scale: %s" % basen)
+
+    # ---- THE METHOD ROW IS READ AT ITS OWN BEST CHECKPOINT (PI RULING 2026-09-02 23:05) ------
+    # See T1_METHOD_BEST_STEP at the top of this file for the ruling and for why it is affordable.
+    # EVERYTHING BELOW IS COMPUTED. The selected step, the three symmetric best-checkpoint
+    # comparisons the note quotes, the window-mean tie the note keeps, and the measured uplift of
+    # a best-of-four-steps reading are all derived here from the same agg()/_paired() calls the
+    # cells are, so no digit of this convention is transcribed into a caption.
+
+    def _t1index(model, lab):
+        """The base dict this row's cells are read against: its own, or the shared index."""
+        if (model, lab) in t1shared:
+            return {k: bases[model][k] for k in sharedidx[model]}
+        return bases[model]
+
+    def _t1percell(model, lab):
+        """{step: (solve %, invalid %, turns, effect pp)} for one row, on the index it is read on."""
+        a = t1agg[(model, lab)]
+        rb = _t1index(model, lab)
+        out = {}
+        for st in WINDOW:
+            r, br, _ks = _paired(a["sel"], st, rb)
+            if r is None:
+                continue
+            iv, tu = window_costs(a["sel"], rb, steps=[st])
+            if iv is None or tu is None:
+                raise SystemExit("tab:main: %r at %s has no cost columns at step %d -- a row "
+                                 "read at one checkpoint needs all three of its cells there"
+                                 % (lab, model, st))
+            out[st] = (r, iv, tu, r - br)
+        if not out:
+            raise SystemExit("tab:main: %r at %s has no scorable checkpoint" % (lab, model))
+        return out
+
+    # The window solve rate of every competing row, kept before the method row is overwritten,
+    # so the uplift below is measured against what this float printed until this pass.
+    t1winsolve = {(m_, l_): t1cell[(m_, l_)][0]
+                  for _, l_, sp_ in T1ROWS if sp_ is not BASE_ROW for m_ in MAIN_SCALES}
+    # The SYMMETRIC reading: every row at its own best checkpoint. Not printed as cells -- the
+    # ruling is that only the method row moves -- but computed, because the note's second
+    # sentence is the claim that the ordering survives applying the rule to everyone.
+    t1bestall, t1uplift, t1step = {}, {}, {}
+    for model in MAIN_SCALES:
+        ups = []
+        for kind, lab, spec in T1ROWS:
+            if spec is BASE_ROW:
+                continue
+            per = _t1percell(model, lab)
+            # Ties break on the EARLIER step, so the choice is deterministic across emissions and
+            # never quietly prefers the end of training.
+            bs = max(per, key=lambda s_: (round(per[s_][0], 6), -s_))
+            t1bestall[(model, lab)] = (bs, per[bs][0])
+            ups.append(per[bs][0] - t1winsolve[(model, lab)])
+            if lab == T1_METHOD_LABEL and T1_METHOD_BEST_STEP:
+                # tab:mainsteps prints EFFECTS, and the note sends a reader there to check which
+                # step this is. Refuse if the effect and the rate disagree about the argmax, or
+                # that pointer would send the reader to a table that names a different step.
+                be = max(per, key=lambda s_: (round(per[s_][3], 6), -s_))
+                if be != bs:
+                    raise SystemExit("tab:main: at %s the method row's best solve rate is at step "
+                                     "%d but its best effect is at step %d -- the note's pointer "
+                                     "to tab:mainsteps would name the wrong checkpoint"
+                                     % (model, bs, be))
+                t1step[model] = bs
+                t1cell[(model, lab)] = per[bs][:3]
+        t1uplift[model] = sum(ups) / len(ups)
+    if T1_METHOD_BEST_STEP:
+        for model in MAIN_SCALES:
+            _w = t1winsolve[(model, T1_METHOD_LABEL)]
+            _r = [v for (mm, ll), (st_, v) in t1bestall.items()
+                  if mm == model and ll != T1_METHOD_LABEL]
+            print("  [tab:main] %s METHOD ROW READ AT STEP %d: %.2f solve / %.2f invalid / %.2f "
+                  "turns (its window mean is %.2f); best non-method row at its own best "
+                  "checkpoint %.2f; mean best-of-%d-steps uplift over the window, all rows, "
+                  "%+.2f pp"
+                  % (model, t1step[model], t1cell[(model, T1_METHOD_LABEL)][0],
+                     t1cell[(model, T1_METHOD_LABEL)][1], t1cell[(model, T1_METHOD_LABEL)][2],
+                     _w, max(_r), len(WINDOW), t1uplift[model]))
     L1 = [GEN,
           "%% anchors/families: " + "; ".join("%s n=%d, %d arms" % (m, fams[m][1], fams[m][2])
                                               for m in MAIN_SCALES),
           "%% matched steps %s" % (WINDOW,),
-          "% TABLE 1, 2026-08-29 (PI): \\methodname{} against the SIX PUBLISHED RULES, each named",
-          "% as its own paper names it and cited on its row. No configuration of ours and no",
-          "% control appears here -- they are Table 2 (configs.tex) -- and no statistic of record",
-          "% appears here either: the CI, the step-15 effect, the window effect and the",
-          "% Holm-adjusted p are mainfull.tex, which is the grid this table replaced.",
+          "% TABLE 1, 2026-08-29 (PI): \\methodname{} against the SIX PUBLISHED RULES AND THE",
+          "% UNIFORM CONTROL (2026-09-02), each named as its own paper names it and cited on its",
+          "% row. No configuration of ours appears here -- they are Table 2 (configs.tex) -- and",
+          "% no statistic of record appears here either: the CI, the step-15 effect, the window",
+          "% effect and the Holm-adjusted p are mainfull.tex, which is the grid this table",
+          "% replaced. The control row is CONTROL_ARMS, the same arm set and the same best-seed",
+          "% rule Table 2's control row reads, and it COMPETES FOR BOLD: the untrained base",
+          "% policy is the only row a winner mark passes over.",
           "% THREE COLUMNS PER SCALE, ONE NUMBER EACH, one decimal, no +-, no Delta, no marker.",
-          "% ALL THREE ARE WINDOW MEANS over the pre-registered {15,20,25,30}, on one shared",
-          "% paired index, on one best seed -- one convention for the whole float:",
+          "% EVERY ROW EXCEPT THE METHOD ROW IS A WINDOW MEAN over the pre-registered",
+          "% {15,20,25,30}, on one shared paired index, on one best seed; the method row is that",
+          "% same seed read at ONE checkpoint, the one where its own solve rate is highest, in",
+          "% all three of its columns (PI ruling 2026-09-02 23:05, T1_METHOD_BEST_STEP). The",
+          "% selected step is chosen by the emitter and printed in the note; nothing else moves.",
           "%   solve    the held-out solve rate, higher is better",
           "%   invalid  the invalid tool-call rate: (n_parse_fail + n_unknown_tool) over all",
           "%            attempted calls, i.e. the share of the policy's tool-call attempts the",
@@ -2680,9 +3358,28 @@ def emit_tables(outdir):
           "% its digits differ from mainabs.tex, which keeps the step-15 reading.",
           "% EVERY ROW IS ONE RUN: the arm's best seed by window mean, ours and every published",
           "% baseline under the identical rule (perseed.tex carries every seed).",
+          "% THE METHOD ROW IS THE REGISTERED FULL RECIPE AT EVERY SCALE (paper_numbers.TABLE1_ROW",
+          "% = \"full\", 2026-09-02). It is not a per-scale maximum over configurations: the other",
+          "% configurations are reported as measured in the appendix ladder, and applying the",
+          "% paper's own transfer-collapse clause uniformly returns the full recipe at all three",
+          "% scales anyway. The one selection this row does carry is over its own four registered",
+          "% checkpoints, which the note states, and the note also gives the symmetric reading in",
+          "% which every row selects a checkpoint and the ordering is unchanged.",]
+    if T1_METHOD_BEST_STEP:
+        L1 += ["%% method row read at step %d at %s (window mean %.2f, printed %.2f); mean "
+               "best-of-%d-steps uplift over the window across rows %+.2f pp"
+               % (t1step[m_], m_, t1winsolve[(m_, T1_METHOD_LABEL)],
+                  t1cell[(m_, T1_METHOD_LABEL)][0], len(WINDOW), t1uplift[m_])
+               for m_ in MAIN_SCALES]
+    L1 += [
           "% THE BASE ROW is the untrained anchor read on the shared held-out index the arm cells",
           "% are scored on, NOT on the anchor's own larger cell; its two rate columns are equal",
           "% because an untrained policy carries no checkpoint. See the emitter for the check.",
+          ] + ["%% %s %s is read on the shared index (n=%d) and not on its own pairs, where the "
+               "anchor moves off the printed base row: %.2f / %+.2f here against %.2f / %+.2f "
+               "there, which is the reading tab:configs and tab:mainfull print."
+               % (m_, l_.replace("\\quad ", ""), v[2], v[3], v[4], v[0], v[1])
+               for (m_, l_), v in sorted(t1shared.items())] + [
           # FULL TEXT WIDTH, and by construction rather than by padding: tabular* with
           # \\extracolsep{\\fill} distributes ALL the slack between the ten columns, so the float
           # spans \\textwidth at whatever type size the float sets and the nine numeric columns
@@ -2736,12 +3433,153 @@ def emit_tables(outdir):
     # It is reproduced VERBATIM in app:tableconv and its reader-facing minimum is the "How to read
     # Tables 1 and 2" paragraph of Section 7.1. What stays is what a reader needs to decode the
     # marks in front of them: the window, the one-run-per-row rule, and what bold means.
-    L1 += ["\\bottomrule"] + notes_block(env="tabular*", items=[
-        "Window means over the pre-registered checkpoints $\\{15,20,25,30\\}$; one run per row,"
-        " that arm's best seed. \\textbf{Bold} is the best in its column under the arrow in the"
-        " header, with the untrained reference row excluded. Column definitions, seed and"
-        " selection rules, and the reimplementation provenance:"
-        " Section~\\ref{sec:triage-results} and Appendix~\\ref{app:tableconv}."])
+    # --- THE SEED COUNT OF EVERY ROW, EMITTED AND NOT TYPED (2026-09-02, fold vii-d) ----------
+    # The best-seed rule is symmetric and this caption has always said so. What it did NOT say is
+    # that the rule selects over a DIFFERENT NUMBER OF RUNS on different rows: this table's method
+    # row is a best of 2 / 2 / 3 and five of its published rows are a single run, so a reader
+    # comparing two printed cells is comparing a maximum over n draws with a maximum over m, and
+    # the expected difference that alone produces is of the same order as the margins printed
+    # here. n therefore goes in the caption where the claim is made, and it is COMPUTED from the
+    # same agg() calls the cells are, not typed: a seed that stops being rankable, or a seed that
+    # lands, moves this clause at the next emission instead of leaving a stale count in a caption.
+    # What a best-of-n reading is worth at these n is quantified in app:tableconv.
+    _t1n = {lab: tuple(t1agg[(m_, lab)]["n"] for m_ in MAIN_SCALES)
+            for _, lab, spec in T1ROWS if spec is not BASE_ROW}
+    _t1many = [lab for _, lab, spec in T1ROWS
+               if spec is not BASE_ROW and set(_t1n[lab]) != {1}]
+    _t1one = [lab for _, lab, spec in T1ROWS
+              if spec is not BASE_ROW and set(_t1n[lab]) == {1}]
+    # The single-run rows are described collectively as published rules, so the emitter refuses
+    # if one of them is ever NOT a published rule -- otherwise a future row set would make a true
+    # sentence false silently, which is the failure this whole clause exists to prevent.
+    _bad = [l for l in _t1one if l not in ROW_CITE]
+    if _bad:
+        raise SystemExit("tab:main: the caption calls the single-run rows published rules, but "
+                         "%s carries one run and no citation" % _bad)
+    _NWORD = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+              6: "six", 7: "seven", 8: "eight"}
+    _t1nclause = ", ".join(
+        "$%s$ for %s" % ("/".join(str(x) for x in _t1n[l]),
+                         l.replace("\\quad ", "").replace(" (control)", ""))
+        for l in _t1many)
+    if _t1one:
+        _t1nclause += (", and one run at every scale for the %s other published rule%s"
+                       % (_NWORD.get(len(_t1one), len(_t1one)),
+                          "" if len(_t1one) == 1 else "s"))
+    print("  [tab:main] seeds per row (%s): %s"
+          % ("/".join(MAIN_SCALES),
+             "; ".join("%s %s" % (l.replace("\\quad ", "").replace(" (control)", ""),
+                                  "/".join(str(x) for x in _t1n[l]))
+                       for _, l, spec in T1ROWS if spec is not BASE_ROW)))
+    # AUDIT, printed at every emission and quoted in app:tableconv: the method row and the control
+    # row restricted to the SEED OFFSETS BOTH ACTUALLY RAN. The two readings disagree at 8B (best
+    # favours the control, the mean favours the method) and the appendix states both directions.
+    _offs = arm_offsets()
+    for m_ in MAIN_SCALES:
+        _mrow, _crow = t1agg[(m_, "\\quad \\methodname{}")], t1agg[(m_, T1_CONTROL_LABEL)]
+        _sh = sorted(set(_offs.get(a) for a in _mrow["arms"])
+                     & set(_offs.get(a) for a in _crow["arms"]) - {None})
+        _pick = lambda r: [100.0 * v for a, v in r["seedmeans"].items() if _offs.get(a) in _sh]
+        _mv, _cv = _pick(_mrow), _pick(_crow)
+        if not _mv or not _cv:
+            continue
+        print("  [tab:main] %s matched offsets %s: method best %+.2f mean %+.2f / control best "
+              "%+.2f mean %+.2f" % (m_, _sh, max(_mv), sum(_mv) / len(_mv),
+                                    max(_cv), sum(_cv) / len(_cv)))
+    # --- THE CONVENTION SENTENCES, ALL FOUR OF THEM EMITTED (PI ruling 2026-09-02 23:05) ------
+    # (i) which convention each row is read under, naming the selected checkpoint per scale;
+    # (ii) the SYMMETRIC reading, in which every row selects its own best checkpoint, and its
+    #      three comparisons, because that is what makes (i) safe rather than flattering;
+    # (iii) the pre-registered readout, the window-mean tie it leaves at 4B, and the pointer to
+    #      the per-step table that lets a reader undo the whole convention;
+    # (iv) that nothing here is resolved at this benchmark's floor.
+    # Every number in all four is computed above. None is typed.
+    import paper_figures as _PF
+
+    def _andjoin(xs):
+        return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+
+    _sc = lambda m_: "$%s$B" % m_.replace("B", "")
+    _stepclause = ", ".join(["step $%d$ at %s" % (t1step[m_], _sc(m_)) if i == 0 else
+                             "$%d$ at %s" % (t1step[m_], _sc(m_))
+                             for i, m_ in enumerate(MAIN_SCALES)])
+    _symclause = _andjoin(["$%.2f$ against $%.2f$%s"
+                           % (t1bestall[(m_, T1_METHOD_LABEL)][1],
+                              max(v for (mm, ll), (st_, v) in t1bestall.items()
+                                  if mm == m_ and ll != T1_METHOD_LABEL),
+                              "")
+                           for i, m_ in enumerate(MAIN_SCALES)])
+    # The symmetric reading is a CLAIM ("still leads at all three scales"), so it is checked here
+    # rather than asserted: if the method ever stops leading under it, this emitter stops.
+    for m_ in MAIN_SCALES:
+        _riv = max(v for (mm, ll), (st_, v) in t1bestall.items()
+                   if mm == m_ and ll != T1_METHOD_LABEL)
+        if t1bestall[(m_, T1_METHOD_LABEL)][1] <= _riv:
+            raise SystemExit("tab:main: at %s the method row does not lead under the symmetric "
+                             "best-checkpoint reading (%.2f against %.2f) -- the note's second "
+                             "sentence would be false"
+                             % (m_, t1bestall[(m_, T1_METHOD_LABEL)][1], _riv))
+    # The window-mean reading, and where it leaves a tie at the printed decimal.
+    _ties, _wmargins = [], []
+    for m_ in MAIN_SCALES:
+        _mw = t1winsolve[(m_, T1_METHOD_LABEL)]
+        _rv, _rl = max((t1winsolve[(m_, l_)], l_) for _, l_, sp_ in T1ROWS
+                       if sp_ is not BASE_ROW and l_ != T1_METHOD_LABEL)
+        _wmargins.append(_mw - _rv)
+        if round(_mw, 1) == round(_rv, 1):
+            _ties.append("the %s cell ties %s ($%.2f$ against $%.2f$)"
+                         % (_sc(m_), _rl.replace("\\quad ", "").replace(" (control)", ""),
+                            _mw, _rv))
+    _winclause = (_andjoin(_ties) if _ties else "\\methodname{} leads at every scale")
+    # (iv) is a claim about ALL THREE readings and is computed over all three.
+    _allmargins = _wmargins + [t1cell[(m_, T1_METHOD_LABEL)][0]
+                               - max(t1winsolve[(m_, l_)] for _, l_, sp_ in T1ROWS
+                                     if sp_ is not BASE_ROW and l_ != T1_METHOD_LABEL)
+                               for m_ in MAIN_SCALES] \
+                 + [t1bestall[(m_, T1_METHOD_LABEL)][1]
+                    - max(v for (mm, ll), (st_, v) in t1bestall.items()
+                          if mm == m_ and ll != T1_METHOD_LABEL)
+                    for m_ in MAIN_SCALES]
+    if max(_allmargins) >= _PF.FLOOR_PP:
+        raise SystemExit("tab:main: a margin of %.2f pp reaches the %.1f pp resolution floor -- "
+                         "the note's last sentence would be false" % (max(_allmargins),
+                                                                      _PF.FLOOR_PP))
+    print("  [tab:main] largest margin over any non-method row, over all three readings: "
+          "%+.2f pp against a %.1f pp floor" % (max(_allmargins), _PF.FLOOR_PP))
+    _t1note = (
+        "The \\methodname{} row is the registered full recipe, read in all three of its columns at"
+        " the checkpoint where its own solve rate is highest (" + _stepclause + "); every other"
+        " row is the mean over the pre-registered $\\{15,20,25,30\\}$. The ordering does not turn"
+        " on that asymmetry: at every row's own best checkpoint \\methodname{} still leads at all"
+        " three scales, reading $2$B$/4$B$/8$B, " + _symclause + ". The window mean is the pre-registered readout, under"
+        " which " + _winclause + "; all four steps and the window mean, for every row, are in"
+        " Table~\\ref{tab:mainsteps}. No margin under any of the three readings approaches the"
+        " $%.1f$\\,pp this benchmark resolves, so none is a measured separation. One run per row,"
+        " that arm's best of $n$ runs, at an $n$ that differs by row: reading $2$B$/4$B$/8$B, "
+        % _PF.FLOOR_PP
+        # 2026-09-04 _fold9 (6e, PI 00:30): THE NOTE IS TRIMMED TO THE CONVENTION SENTENCES THE
+        # PI REQUIRES AND NOTHING ELSE. Kept verbatim, in order: the best-checkpoint statement
+        # with its per-scale steps, the symmetric-reading sentence, the window/tie sentence with
+        # the tab:mainsteps pointer, the floor sentence, the seed-count sentence and the
+        # warm-bank sentence. MOVED OUT, verbatim, to Appendix~\ref{app:tableconv}: the bold
+        # legend (which Section~\ref{sec:triage-results} already states for both main tables) and
+        # the trailing provenance pointer (which this float's own caption already carries). No
+        # cell, bold, header or caption changes; this is a note-text edit only, and rltable.tex is
+        # the one emitted file this pass is allowed to alter.
+        + _t1nclause + ". Our warm bank runs inside this paper's allocator: the \\methodname{} and"
+        " \\textsc{Tscl} rows carry it and no other does, worth $+1.5$\\,pp to \\textsc{Trace} at"
+        " $2$B (Table~\\ref{tab:ladder2b}).")
+    for (m_, l_), v in sorted(t1shared.items()):
+        _t1note += (" At $%s$B the %s row is read on this shared index; on its own pairs it reads"
+                    " $%.1f$ with a $%+.1f$ effect, which is what Table~\\ref{tab:configs} prints"
+                    " (Appendix~\\ref{app:tableconv})."
+                    % (m_.replace("B", ""),
+                       l_.replace("\\quad ", "").replace(" (control)", ""), v[0], v[1]))
+    # 2026-09-04 _fold9 (6e): the trailing provenance pointer moved to Appendix~\ref{app:tableconv}
+    # with the bold legend. tab:main's caption already ends "Conventions and per-arm effects:
+    # Section~\ref{sec:triage-results} and Table~\ref{tab:mainfull}", so the note was repeating a
+    # pointer the reader meets two lines above it.
+    L1 += ["\\bottomrule"] + notes_block(env="tabular*", items=[_t1note])
     W("rltable.tex", L1)
 
     # ---- TABLE 2: THIS FRAMEWORK'S CONFIGURATIONS AND THE UNIFORM CONTROL --------------------
@@ -2843,8 +3681,15 @@ def emit_tables(outdir):
     # app:tableconv, and what stays is the legend a reader needs in front of the numbers.
     L2 += ["\\bottomrule"] + notes_block(env="tabular*", items=[
         "Each row changes one component of the full method; $\\Delta$ vs full is that row's cost"
-        " in solve rate at the same scale. $^{*}$~clears Holm at $0.05$ in its own scale's family;"
-        " \\textbf{bold} is the best solve rate and the best effect at each scale."
+        " in solve rate at the same scale, and \\emph{effect vs base} is that row's own paired"
+        " difference from the anchor on the tasks it and the anchor both attempted, not its solve"
+        " rate minus Table~\\ref{tab:main}'s base row."
+        " $^{*}$~clears Holm at $0.05$ in its own scale's family;"
+        " \\textbf{bold} is the best solve rate and the best effect at each scale. The full"
+        " method here is Table~\\ref{tab:main}'s \\methodname{} row at every scale. The $8$B"
+        " shrinkage cell's arm differs from its siblings in infrastructure as well as in that"
+        " component, at tensor parallelism $2$ and under a $20{,}480$-token packing limit on ten"
+        " of its thirty optimizer steps (Appendix~\\ref{app:trainconf})."
         " What each row changes, and the rows measured at fewer than three scales:"
         " Section~\\ref{sec:triage-results} and Appendix~\\ref{app:tableconv}."])
     W("configs.tex", L2)
@@ -2918,8 +3763,10 @@ def emit_tables(outdir):
     import paper_figures as PF
     LB = [GEN,
           "% Bar lengths for Figure 1's band (c), in percentage points, from tab:main's own rows.",
-          "% Method = the TRIAGE row; Control = the uniform GRPO row; Best = the largest window",
-          "% mean among the Published-baseline rows that carry a number at that scale.",
+          "% Method = the TRIAGE row, at the ONE checkpoint tab:main reads that row at since the",
+          "% 2026-09-02 ruling (\\ov*MethodStep below names it); Control = the uniform GRPO row",
+          "% and Best = the largest window mean among the Published-baseline rows that carry a",
+          "% number at that scale, both of them window means as before.",
           "% One decimal, sign only when negative -- the way tab:main prints them.",
           "% 2026-08-28: these move with tab:main's seed convention, which is now the BEST SEED of",
           "% each multi-seed row. That is the point of emitting them beside the table: a bar and a",
@@ -2950,6 +3797,13 @@ def emit_tables(outdir):
                 # "best published baseline" from one of our own arms.
                 continue
             if "Method" in block:
+                # 2026-09-02: tab:main's method row is read at ONE checkpoint (T1_METHOD_BEST_STEP),
+                # so this bar is that checkpoint's effect and not the window mean. The point of
+                # emitting these lengths beside the table is that a bar and a cell can never be
+                # two different statistics of the same row, and that rule survives the convention
+                # change only if the bar follows the cell.
+                if T1_METHOD_BEST_STEP and model in t1step:
+                    v = 100.0 * a["per"][t1step[model]]
                 vals["Method"] = v
             elif "Control" in block:
                 vals["Control"] = v
@@ -2961,6 +3815,8 @@ def emit_tables(outdir):
                                  "be drawn from a value that does not exist" % (role, model))
             LB.append("\\def\\%s%s{%.1f}" % (OVNAME[model], role, vals[role]))
             ovlog.append((model, role, vals[role]))
+        if T1_METHOD_BEST_STEP and model in t1step:
+            LB.append("\\def\\%sMethodStep{%d}" % (OVNAME[model], t1step[model]))
     W("overview_bars.tex", LB)
 
     # ---- FRAMEWORK CONFIGURATIONS, moved out of tab:main 2026-08-28 --------------------------
@@ -3102,20 +3958,271 @@ def emit_tables(outdir):
     W("mainsteps.tex", L)
 
     # ---- Our own measured negatives, appendix ------------------------------------------------
+    # 2026-09-03 _fold7h: two rows and one block header, and each new row is read at ITS OWN
+    # scale -- its own base anchor, its own pinned family, its own Holm correction -- which is
+    # why the loop takes the model off the registry instead of closing over the 8B family.
     L = [GEN,
          "% the measured-negative arms, moved out of the main table 2026-08-17.",
+         "% 2026-09-03: the last two rows are 2B and 4B arms and carry their own scales'",
+         "% anchors and Holm families; the note says so and the caption repeats it.",
+         "% 2026-09-06: the temperature block is now a FOUR-POINT curve at 4B with one rung",
+         "% at 2B and one at 8B, and a second block carries the two variable-k pilots. The",
+         "% 8B temperature row and the 4B variable-k row are ABOVE the configurations they",
+         "% came from; they sit here because they are the same one-flag construction as the",
+         "% rows beside them, not because they failed. The caption says which is which.",
          "\\begin{tabular}{lrrrrrr}", "\\toprule",
          " & \\multicolumn{4}{c}{effect (pp), by step} & window & Holm-adj. \\\\",
          "\\cmidrule(lr){2-5}",
          "configuration & $15$ & $20$ & $25$ & $30$ & mean & $p$ \\\\", "\\midrule"]
-    for lab, arms in NEGATIVES:
-        a = agg(fam, arms)
+    for kind, lab, arms, model in NEGATIVES:
+        if kind == "@HDR":
+            L += ["\\midrule", "\\multicolumn{7}{l}{%s} \\\\" % lab]
+            continue
+        f_ = fams[model][0]
+        a = agg(f_, arms)
         if a is None:
             continue
         L.append("%s & %s & %s & %s \\\\"
-                 % (lab, " & ".join(_cells(fam[a["arms"][0]], FULL_N)),
+                 % (lab, " & ".join(_cells(f_[a["arms"][0]], FULL_N)),
                     eff(a, star=False), qcell(a)))
-    L += ["\\bottomrule", "\\end{tabular}"]
+
+    # THE WHOLE DIAL, EMITTED RATHER THAN TYPED. The lowest point of each scale is a printed cell
+    # of this paper already (the per-scale rho row of tab:configs, tab:mainfull and
+    # tab:transfermain); what did not exist anywhere is the curve, and a curve typed into prose is
+    # the defect the 2026-09-02 sweep spent a whole pass repairing. Every value below is computed
+    # here from the same families and the same benchmark records the floats are built from.
+    _dial = {}
+    for _sc, _pts in sorted(TEMP_DIAL.items()):
+        _f = fams[_sc][0]
+        _row = []
+        for _tau, _t in _pts:
+            if _t not in _f:
+                raise SystemExit("tab:negatives: the temperature dial at %s names %s, which is "
+                                 "not in the pinned family" % (_sc, _t))
+            _b, _n = BR.load_run(_t)[0], NR.load_run(_t)[0]
+            if _b is None or _n is None:
+                raise SystemExit("tab:negatives: %s has no transfer records -- the temperature "
+                                 "dial cannot be written from the records" % _t)
+            _row.append(dict(tau=_tau, arm=_t, win=_f[_t]["mean"],
+                             bfcl=BR.rate(_b), nest=NR.rate(_n)))
+        _b = BR.load_run(BFCL_BASE[_sc])[0]
+        _n = NR.load_run(NEST_BASE[_sc])[0]
+        if _b is None or _n is None:
+            raise SystemExit("tab:negatives: the %s anchor has no transfer records" % _sc)
+        _dial[_sc] = dict(pts=_row, bfcl_base=BR.rate(_b), nest_base=NR.rate(_n))
+
+    # SIX BUILD-REFUSALS, one per claim the prose and the caption make about this dial. If any of
+    # them stops being true of the records, the paper does not build.
+    #   (1) the window FALLS with tau at 2B and 4B;
+    #   (2) and RISES at 8B -- the inversion, which is the whole 8B reading;
+    #   (3) NESTFUL rises with tau at every scale;
+    #   (4) the 4B window is monotone DOWN across all four measured points;
+    #   (5) BFCL never reaches the untrained 4B policy anywhere on the 4B curve, which is what
+    #       falsifies the interpolation hypothesis;
+    #   (6) at 8B the natural temperature is above its parent on ALL THREE axes.
+    for _sc, _d in sorted(_dial.items()):
+        _lo, _hi = _d["pts"][0], _d["pts"][-1]
+        _falls = _sc in ("2B", "4B")
+        if _falls and not _hi["win"] < _lo["win"]:
+            raise SystemExit("tab:negatives: the dial claim says the window FALLS at %s and the "
+                             "cells say otherwise: %.4f -> %.4f"
+                             % (_sc, 100 * _lo["win"], 100 * _hi["win"]))
+        if not _falls and not _hi["win"] > _lo["win"]:
+            raise SystemExit("tab:negatives: the dial claim says the window RISES at %s (the "
+                             "inversion) and the cells say otherwise: %.4f -> %.4f"
+                             % (_sc, 100 * _lo["win"], 100 * _hi["win"]))
+        if not _hi["nest"] > _lo["nest"]:
+            raise SystemExit("tab:negatives: the dial claim says NESTFUL RISES at %s and the "
+                             "records say otherwise: %.2f -> %.2f"
+                             % (_sc, _lo["nest"], _hi["nest"]))
+    _w4 = [p["win"] for p in _dial["4B"]["pts"]]
+    if not all(_w4[i] > _w4[i + 1] for i in range(len(_w4) - 1)):
+        raise SystemExit("tab:negatives: the 4B window is claimed monotone decreasing in tau and "
+                         "is not: %s" % [round(100 * w, 2) for w in _w4])
+    _b4max = max(p["bfcl"] for p in _dial["4B"]["pts"])
+    if _b4max >= _dial["4B"]["bfcl_base"]:
+        raise SystemExit("tab:negatives: the dial's falsification says BFCL never reaches the "
+                         "untrained 4B policy on this curve, and one point now does: %.2f vs %.2f"
+                         % (_b4max, _dial["4B"]["bfcl_base"]))
+    _l8, _h8 = _dial["8B"]["pts"][0], _dial["8B"]["pts"][-1]
+    if not (_h8["win"] > _l8["win"] and _h8["bfcl"] > _l8["bfcl"] and _h8["nest"] > _l8["nest"]):
+        raise SystemExit("tab:negatives: the 8B reading says the natural temperature is above its "
+                         "parent on all three axes and the records say otherwise: window %.4f v "
+                         "%.4f, BFCL %.2f v %.2f, NESTFUL %.2f v %.2f"
+                         % (100 * _h8["win"], 100 * _l8["win"], _h8["bfcl"], _l8["bfcl"],
+                            _h8["nest"], _l8["nest"]))
+    # THE SUPERLATIVE IS CHECKED, NOT TYPED. The note calls the 8B row's BFCL cell the highest this
+    # project has recorded on that benchmark; that is a claim over EVERY scored checkpoint in the
+    # archive, not over the rows of this table, so it is verified against the archive. Runs scored
+    # against a different task index are skipped rather than compared, which is the same rule
+    # bfcl_records enforces when it refuses to average them; a partial cell is skipped too.
+    # NOTHING OF THE KIND IS CLAIMED FOR NESTFUL AND THE REASON IS THAT IT WOULD BE FALSE: that
+    # arm's 41.75 is sixth on the same archive, behind cells of the uniform control, the VIP
+    # baseline's second seed, the plug-in configuration, its own parent read at step 15, and the
+    # replay baseline. The note says BFCL and stops there.
+    _best_bfcl = []
+    for _d_ in sorted(glob.glob(os.path.join(BR.BFCL_ROOT, "run_*"))):
+        _a_ = os.path.basename(_d_)[4:]
+        try:
+            _s_ = BR.load_run(_a_, require_index=True)[0]
+        except SystemExit:
+            continue
+        if _s_ and len(_s_) >= 700:
+            _best_bfcl.append((BR.rate(_s_), _a_))
+    if _best_bfcl and max(_best_bfcl)[0] > _h8["bfcl"] + 1e-9:
+        raise SystemExit("tab:negatives: the note calls %.2f the highest BFCL cell in the archive "
+                         "and %s now scores %.2f" % (_h8["bfcl"], max(_best_bfcl)[1],
+                                                     max(_best_bfcl)[0]))
+
+    # THE PRE-REGISTERED 4B SHIP TEST, evaluated here rather than asserted in prose. A point ships
+    # only if all three clauses hold; the emitter records which clause each point fails on, and
+    # the note prints it.
+    _ref = fams["4B"][0][SHIP_TEST_4B["win_ref"]]["mean"]
+    _fails = []
+    for _p in _dial["4B"]["pts"]:
+        _bad = []
+        if not _p["win"] > _ref:
+            _bad.append("window")
+        if not _p["bfcl"] >= _dial["4B"]["bfcl_base"]:
+            _bad.append("BFCL")
+        if not _p["nest"] >= _dial["4B"]["nest_base"]:
+            _bad.append("NESTFUL")
+        _fails.append((_p["tau"], _bad))
+    if any(not b for _, b in _fails):
+        raise SystemExit("tab:negatives: a 4B dial point now PASSES the pre-registered ship test "
+                         "and the paper says none does: %s" % _fails)
+    if not all("BFCL" in b for _, b in _fails):
+        raise SystemExit("tab:negatives: the paper says every 4B dial point fails on BFCL and one "
+                         "does not: %s" % _fails)
+
+    # THE VARIABLE-k PILOTS, read off the run logs. The budget identity (sum k per cycle equal to
+    # the uniform k=5 spend) is checked rather than asserted: a pilot that spent more rollouts
+    # than its parent would not be a one-flag contrast at all.
+    _vk = []
+    for _sc, _par, _arm in VARK_PILOTS:
+        _f = fams[_sc][0]
+        if _arm not in _f or _par not in _f:
+            raise SystemExit("tab:negatives: the variable-k pilot at %s needs both %s and %s in "
+                             "the pinned family" % (_sc, _par, _arm))
+        _cy = vark_cycles(_arm)
+        if not _cy:
+            raise SystemExit("tab:negatives: %s has no allocator log line, so its k histogram "
+                             "cannot be written from the record" % _arm)
+        if len({s for _, _, s in _cy}) != 1:
+            raise SystemExit("tab:negatives: %s did not hold one budget across cycles: %s"
+                             % (_arm, [s for _, _, s in _cy]))
+        _off = max(sum(v for k, v in h.items() if k != 5) / n for n, h, _ in _cy)
+        _r = {}
+        for _t in (_par, _arm):
+            _b, _n = BR.load_run(_t)[0], NR.load_run(_t)[0]
+            if _b is None or _n is None:
+                raise SystemExit("tab:negatives: %s has no transfer records" % _t)
+            _r[_t] = (BR.rate(_b), NR.rate(_n))
+        # THE TERMINATION SHARE, because "the model loops" is an observation about transcripts and
+        # this is the benchmark's own record of it, on the same instances the pass rate beside it
+        # is read from. It is bfcl_records.forced_share, the NARROWEST of the three termination
+        # statistics this project quotes; see that function for why the other two are larger and
+        # are not interchangeable with it.
+        _ft = {t: BR.forced_share(t)[0] for t in (_par, _arm, BFCL_BASE[_sc])}
+        _vk.append(dict(scale=_sc, cycles=_cy, off=_off, sumk=_cy[0][2],
+                        win=_f[_arm]["mean"], win_par=_f[_par]["mean"],
+                        bfcl=_r[_arm][0], bfcl_par=_r[_par][0],
+                        bfcl_base=BR.rate(BR.load_run(BFCL_BASE[_sc])[0]),
+                        nest=_r[_arm][1], nest_par=_r[_par][1],
+                        nest_base=NR.rate(NR.load_run(NEST_BASE[_sc])[0]),
+                        ft=_ft[_arm], ft_par=_ft[_par], ft_base=_ft[BFCL_BASE[_sc]]))
+    if max(d["off"] for d in _vk) >= 0.10:
+        raise SystemExit("tab:negatives: the paper says the freed allocator moves fewer than 10%% "
+                         "of rows off k=5 and one cycle now moves more: %s"
+                         % [round(100 * d["off"], 2) for d in _vk])
+
+    def _hist(h):
+        return "$\\{%s\\}$" % ",\\,".join("%d{:}%d" % (k, h[k]) for k in sorted(h))
+
+    def _curve(sc):
+        return "; ".join("$\\tau{=}%.2f$ ($%s$, $%.2f$, $%.2f$)"
+                         % (p["tau"], pp(p["win"], 2), p["bfcl"], p["nest"])
+                         for p in _dial[sc]["pts"])
+
+    _d4, _d2, _d8 = _dial["4B"], _dial["2B"], _dial["8B"]
+    L += ["\\bottomrule"] + notes_block(items=[
+        "\\emph{The temperature block.} Every row is the per-scale $\\rho$ configuration of"
+        " Table~\\ref{tab:configs} with the sampling temperature moved and no other token changed,"
+        " one seed at the same offset its parent ran, so each is one flag from a printed"
+        " configuration; each is read at its own scale throughout, against that scale's base anchor"
+        " and inside that scale's pinned Holm family. The registered value it moves from is"
+        " $\\tau{=}0.3$ at $2$B and $4$B and $\\tau{=}0.5$ at $8$B, and those starting points are"
+        " the printed per-scale $\\rho$ rows, not rows of this table. Reading (window, \\textsc{Bfcl},"
+        " \\textsc{Nestful}) against $4$B bases of $%.2f$ and $%.2f$, the $4$B curve runs %s."
+        " The window falls monotonically; \\textsc{Nestful} recovers by $\\tau{=}0.60$ and stays up;"
+        " \\textsc{Bfcl} is \\emph{not} monotone, dips to $%.2f$ at the midpoint, and reaches the"
+        " untrained policy at no point on the curve, its best being $%.2f$ at $\\tau{=}%.2f$."
+        % (_d4["bfcl_base"], _d4["nest_base"], _curve("4B"),
+           min(p["bfcl"] for p in _d4["pts"]),
+           max(p["bfcl"] for p in _d4["pts"]),
+           max(_d4["pts"], key=lambda p: p["bfcl"])["tau"]),
+        "The pre-registered test for shipping a point of this dial was set before any of the four"
+        " ran: beat the shipped $4$B recipe's window of $%s$ \\emph{and} sit at or above the"
+        " untrained $4$B policy on both transfer benchmarks. All four points fail it, and all four"
+        " fail on \\textsc{Bfcl}; two of them, $\\tau{=}0.60$ and $\\tau{=}0.85$, pass the other two"
+        " clauses. The closest miss is $\\tau{=}0.85$ at $%.2f$ against $%.2f$, which is $%.1f$\\,pp"
+        " on $n=800$ and inside what one run of this benchmark separates; it is recorded as a"
+        " distance, not as a shipping claim."
+        % (pp(_ref), _d4["pts"][2]["bfcl"], _d4["bfcl_base"],
+           _d4["bfcl_base"] - _d4["pts"][2]["bfcl"]),
+        "\\emph{The dial inverts with scale, and the $8$B row is the reason it is printed here.}"
+        " At $2$B the same move costs $%s$\\,pp of window ($%s$ to $%s$) and at $4$B $%s$"
+        " ($%s$ to $%s$), while at $8$B it \\emph{gains} $%s$ ($%s$ to $%s$) and takes"
+        " \\textsc{Bfcl} from $%.2f$ to $%.2f$ and \\textsc{Nestful} from $%.2f$ to $%.2f$, against"
+        " $8$B bases of $%.2f$ and $%.2f$: above its parent on all three axes, and the highest"
+        " \\textsc{Bfcl} cell this project has recorded. It is not a recipe change, because the"
+        " same one flag fails at the two smaller scales; what it is evidence for is that the"
+        " registered recipe is right to set this constant per scale."
+        % (pp(_d2["pts"][-1]["win"] - _d2["pts"][0]["win"], 2),
+           pp(_d2["pts"][0]["win"], 2), pp(_d2["pts"][-1]["win"], 2),
+           pp(_d4["pts"][-1]["win"] - _d4["pts"][0]["win"], 2),
+           pp(_d4["pts"][0]["win"], 2), pp(_d4["pts"][-1]["win"], 2),
+           pp(_d8["pts"][-1]["win"] - _d8["pts"][0]["win"], 2),
+           pp(_d8["pts"][0]["win"], 2), pp(_d8["pts"][-1]["win"], 2),
+           _d8["pts"][0]["bfcl"], _d8["pts"][-1]["bfcl"],
+           _d8["pts"][0]["nest"], _d8["pts"][-1]["nest"],
+           _d8["bfcl_base"], _d8["nest_base"]),
+        "The $4$B \\textsc{Nestful} movement over the dial, $%+.2f$\\,pp from $\\tau{=}0.30$ to"
+        " $\\tau{=}1.12$, takes that configuration from $%.2f$\\,pp \\emph{below} the untrained $4$B"
+        " policy's $%.2f$ to $%.2f$ above it, and is far outside the $7.85$\\,pp seed spread this"
+        " paper measures on the transfer axis (Appendix~\\ref{app:genfull}); the $2$B movements,"
+        " $%+.2f$ on \\textsc{Bfcl} and $%+.2f$ on \\textsc{Nestful}, are inside it."
+        % (_d4["pts"][-1]["nest"] - _d4["pts"][0]["nest"],
+           _d4["nest_base"] - _d4["pts"][0]["nest"], _d4["nest_base"],
+           _d4["pts"][-1]["nest"] - _d4["nest_base"],
+           _d2["pts"][-1]["bfcl"] - _d2["pts"][0]["bfcl"],
+           _d2["pts"][-1]["nest"] - _d2["pts"][0]["nest"]),
+        "\\emph{The variable-$k$ block.} Each row is its scale's method arm with the group size"
+        " freed across tasks and nothing else changed, one seed at the parent's own offset, and the"
+        " per-step rollout total pinned to the uniform $k{=}5$ spend ($\\sum_i k_i = %d$ at every"
+        " cycle of both runs), so the pilot is budget-matched rather than budget-freed."
+        " Proposition~\\ref{prop:rankcal} leaves the calibrated level inert at fixed $k$; freed, it"
+        " is what decides. What it does is little: the per-cycle histograms over $256$ rows run %s"
+        " at $2$B and %s at $4$B, so at most $%.1f\\%%$ of rows leave $k{=}5$ at either scale."
+        " The two runs then part. At $2$B the window falls from $%s$ to $%s$ and both transfer"
+        " benchmarks collapse, \\textsc{Bfcl} to $%.2f$ against a base of $%.2f$ and \\textsc{Nestful}"
+        " to $%.2f$ against $%.2f$; that collapse is a termination pathology on the benchmark's own"
+        " error field, $%.1f\\%%$ of instances \\texttt{force\\_terminated} against $%.1f\\%%$ for the"
+        " fixed-$k$ parent and $%.1f\\%%$ for the untrained policy."
+        " At $4$B the window \\emph{rises}, from $%s$ to $%s$, with"
+        " \\textsc{Bfcl} at $%.2f$ above the base $%.2f$ and \\textsc{Nestful} at $%.2f$, $%.2f$ under"
+        " it and inside the $7.85$\\,pp transfer seed spread. One run each way, every in-window"
+        " difference inside the $6.0$\\,pp this benchmark resolves: measured, and not settled."
+        % (_vk[0]["sumk"],
+           ", ".join(_hist(h) for _, h, _ in _vk[0]["cycles"]),
+           ", ".join(_hist(h) for _, h, _ in _vk[1]["cycles"]),
+           100 * max(d["off"] for d in _vk),
+           pp(_vk[0]["win_par"]), pp(_vk[0]["win"]),
+           _vk[0]["bfcl"], _vk[0]["bfcl_base"], _vk[0]["nest"], _vk[0]["nest_base"],
+           _vk[0]["ft"], _vk[0]["ft_par"], _vk[0]["ft_base"],
+           pp(_vk[1]["win_par"]), pp(_vk[1]["win"]),
+           _vk[1]["bfcl"], _vk[1]["bfcl_base"], _vk[1]["nest"],
+           _vk[1]["nest_base"] - _vk[1]["nest"])])
     W("negatives.tex", L)
 
     # ---- Per-seed reproduction, appendix -----------------------------------------------------
@@ -3273,10 +4380,16 @@ def emit_tables(outdir):
          % (nbase2b, nfam2b),
          "% The 2B replicate of the two structural ablations of coadapt.tex. One seed each, pinned",
          "% to the full method's own seed-offset (500) by the ablation pairing rule.",
+         "% The last two rows are the same bank rung at 4B (2026-09-02) and at 8B (2026-09-04):",
+         "% same construction, same offset, each read against its own scale's anchor and corrected",
+         "% inside its own scale's family. See the note.",
          "\\begin{tabular}{lrrrr}", "\\toprule",
          "component changed & window & cells & $\\Delta$ vs & Holm-adj. \\\\",
          " & mean (pp) & of $4$ & full (pp) & $p$ \\\\", "\\midrule"]
     for kind, lab, arms in ABLATION2B:
+        if kind == "@HDR":
+            L += ["\\midrule", "\\multicolumn{5}{l}{%s} \\\\" % lab]
+            continue
         a = agg(fam2b, arms)
         if a is None:
             L.append("%s & \\multicolumn{4}{c}{\\emph{no scorable cell}} \\\\" % lab)
@@ -3285,7 +4398,135 @@ def emit_tables(outdir):
         # Same no-bold convention as coadapt.tex above; see that comment.
         L.append("%s & %s & %d & %s & %s \\\\"
                  % (lab, eff(a, bold=False, star=False), a["cells"], d, qcell(a)))
-    L += ["\\bottomrule", "\\end{tabular}"]
+    # ---- THE SAME RUNG, ONE SCALE UP (2026-09-02 _fold7c) ------------------------------------
+    # A confound answered at one scale is not answered. See LADDER_BANK_4B for the construction
+    # and for why this row's delta is read against the OFFSET-MATCHED full-method seed; both
+    # readings are printed, this one in the cell and the other in the note.
+    fam4b, nbase4b, nfam4b = fams["4B"]
+    _full4b = agg(fam4b, LADDER_FULL_4B)
+    _best4b = agg(fam4b, CFG_ARMS["fixed"]["4B"], best=True)
+    _bank4b = agg(fam4b, LADDER_BANK_4B[1])
+    _pub4b = agg(fam4b, ["q4bTf"])
+    for _nm, _a in (("the offset-matched 4B full method", _full4b),
+                    ("the 4B full method's best seed", _best4b),
+                    ("TRACE with our warm bank at 4B", _bank4b),
+                    ("TRACE as published at 4B", _pub4b)):
+        if _a is None:
+            raise SystemExit("tab:coadapt2b: %s has no scorable window -- the 4B rung of the bank "
+                             "ladder cannot be printed" % _nm)
+    L.append("%s & %s & %d & $%s$ & %s \\\\"
+             % (LADDER_BANK_4B[0], eff(_bank4b, bold=False, star=False), _bank4b["cells"],
+                pp(_bank4b["mean"] - _full4b["mean"]), qcell(_bank4b)))
+    # ---- AND THE SAME RUNG AT THE HEADLINE SCALE (2026-09-04 _fold10) -------------------------
+    # See LADDER_BANK_8B for the construction and for why the reference is a8T3g (offset 500) and
+    # not the seed tab:main prints. This rung is the one that reverses the 2B and 4B readings, so
+    # every claim the note makes about it is a build refusal below rather than a sentence.
+    fam8b, nbase8b, nfam8b = fams["8B"]
+    _full8b = agg(fam8b, LADDER_FULL_8B)
+    _best8b = agg(fam8b, CFG_ARMS["fixed"]["8B"], best=True)
+    _bank8b = agg(fam8b, LADDER_BANK_8B[1])
+    _pub8b = agg(fam8b, ["t8Tf"])
+    for _nm, _a in (("the offset-matched 8B full method", _full8b),
+                    ("the 8B full method's best seed", _best8b),
+                    ("TRACE with our warm bank at 8B", _bank8b),
+                    ("TRACE as published at 8B", _pub8b)):
+        if _a is None:
+            raise SystemExit("tab:coadapt2b: %s has no scorable window -- the 8B rung of the bank "
+                             "ladder cannot be printed" % _nm)
+    L.append("%s & %s & %d & $%s$ & %s \\\\"
+             % (LADDER_BANK_8B[0], eff(_bank8b, bold=False, star=False), _bank8b["cells"],
+                pp(_bank8b["mean"] - _full8b["mean"]), qcell(_bank8b)))
+    # THE TRANSFER CELLS OF THIS TABLE'S ROWS, IN THE NOTE, because they exist and were printed
+    # nowhere (2026-09-02). The window column is the in-distribution reading; the two held-out
+    # benchmarks are where this paper says the result lives, and the bank-carrying \textsc{Trace}
+    # row leads the method's own 2B cells on BOTH of them. Read from the same records
+    # tab:bfcl2b and tab:nestrep are read from (bfcl_records / nestful_records at step 30), never
+    # transcribed, so a note and a table cannot disagree.
+    # The untrained anchor is the one tag the two record sets spell differently at 8B: BFCL's
+    # directory is run_base and NESTFUL's is run_base8b (bfcl_records.SCALES / nestful_records.
+    # SCALES). The pair is written out here rather than guessed, so a missing anchor is a refusal
+    # and never a silently dropped comparison.
+    _t7 = {}
+    for _tag, _btag, _ntag in (("base2b", "base2b", "base2b"), ("q2bT", "q2bT", "q2bT"),
+                               ("t2bTf", "t2bTf", "t2bTf"), ("t2bTbk", "t2bTbk", "t2bTbk"),
+                               ("base4b", "base4b", "base4b"), ("q4bTf", "q4bTf", "q4bTf"),
+                               ("t4bTbk", "t4bTbk", "t4bTbk"),
+                               ("base8b", "base", "base8b"), ("t8Tf", "t8Tf", "t8Tf"),
+                               ("t8Tbk", "t8Tbk", "t8Tbk")):
+        _b = BR.load_run(_btag)[0]
+        _n = NR.load_run(_ntag)[0]
+        if _b is None or _n is None:
+            raise SystemExit("tab:coadapt2b: %s has no transfer records -- the note cannot be "
+                             "written from the records" % _tag)
+        _t7[_tag] = (BR.rate(_b), NR.rate(_n))
+    if not (_t7["t2bTbk"][0] > _t7["q2bT"][0] and _t7["t2bTbk"][1] > _t7["q2bT"][1]):
+        raise SystemExit("tab:coadapt2b: the note asserts that TRACE with our bank leads the "
+                         "method's 2B transfer cells on both benchmarks and the records say "
+                         "otherwise: %s" % _t7)
+    # THE 4B SENTENCE ASSERTS FOUR THINGS AND EACH ONE IS CHECKED AGAINST THE RECORDS HERE, so a
+    # cell that moves takes the sentence out rather than leaving it standing and wrong.
+    if not (_t7["t4bTbk"][0] < _t7["base4b"][0] and _t7["t4bTbk"][0] < _t7["q4bTf"][0]
+            and _t7["t4bTbk"][1] > _t7["base4b"][1] and _t7["t4bTbk"][1] > _t7["q4bTf"][1]):
+        raise SystemExit("tab:coadapt2b: the note asserts that at 4B the bank takes TRACE below "
+                         "the untrained base policy on BFCL and above it on NESTFUL, and the "
+                         "records say otherwise: %s" % _t7)
+    if not (_full4b["mean"] < _bank4b["mean"] < _best4b["mean"]):
+        raise SystemExit("tab:coadapt2b: the note asserts that the 4B rung sits between the full "
+                         "method's two 4B seeds and the cells say otherwise: %.4f %.4f %.4f"
+                         % (_full4b["mean"], _bank4b["mean"], _best4b["mean"]))
+    # THE 8B SENTENCE IS THE ONE THAT REVERSES THE OTHER TWO SCALES, so all four of its claims are
+    # refusals here (2026-09-04). If any cell moves the sentence comes out; it is never left
+    # standing on a reading the records no longer support.
+    if not (_bank8b["mean"] < _pub8b["mean"] and _bank8b["mean"] < _full8b["mean"]
+            and _bank8b["mean"] < _best8b["mean"]):
+        raise SystemExit("tab:coadapt2b: the note asserts that at 8B the bank takes the published "
+                         "rule below both its bank-less parent and both of the full method's "
+                         "seeds in-window, and the cells say otherwise: bank %.4f pub %.4f "
+                         "off500 %.4f best %.4f"
+                         % (_bank8b["mean"], _pub8b["mean"], _full8b["mean"], _best8b["mean"]))
+    if not (_t7["t8Tbk"][0] > _t7["base8b"][0] and _t7["t8Tbk"][0] > _t7["t8Tf"][0]):
+        raise SystemExit("tab:coadapt2b: the note asserts that at 8B the bank moves the published "
+                         "rule UP on BFCL and above the untrained policy, and the records say "
+                         "otherwise: %s" % _t7)
+    if not (_t7["t8Tbk"][1] < _t7["base8b"][1] and _t7["t8Tbk"][1] < _t7["t8Tf"][1]):
+        raise SystemExit("tab:coadapt2b: the note asserts that at 8B the bank moves the published "
+                         "rule DOWN on NESTFUL and below the untrained policy, and the records "
+                         "say otherwise: %s" % _t7)
+    L += ["\\bottomrule"] + notes_block(items=[
+        "The two transfer benchmarks at step $30$, which this table's window column does not"
+        " carry. \\textsc{Trace} with our warm bank scores $%.2f$ on \\textsc{Bfcl} and $%.2f$ on"
+        " \\textsc{Nestful}, above \\methodname{}'s own $2$B seed on both ($%.2f$ and $%.2f$) and"
+        " above the untrained base policy ($%.2f$ and $%.2f$); \\textsc{Trace} as published is at"
+        " $%.2f$ and $%.2f$, so the bank moves that rule up on \\textsc{Bfcl} and down on"
+        " \\textsc{Nestful}. Same records as the transfer floats."
+        % (_t7["t2bTbk"][0], _t7["t2bTbk"][1], _t7["q2bT"][0], _t7["q2bT"][1],
+           _t7["base2b"][0], _t7["base2b"][1], _t7["t2bTf"][0], _t7["t2bTf"][1]),
+        "The next-to-last row is that rung at $4$B and it is read at $4$B throughout: against the"
+        " $4$B anchor, in the $%d$-arm $4$B Holm family, and with a $\\Delta$ against the $4$B full"
+        " method's own offset-$500$ seed ($%s$), the pairing every removal row above uses. Read"
+        " instead against the $4$B seed Table~\\ref{tab:main} prints ($%s$) it is $%s$, so this"
+        " rung sits between the full method's two $4$B seeds. On transfer it does not repeat the"
+        " $2$B result: \\textsc{Bfcl} $%.2f$, below both the untrained $4$B base policy ($%.2f$)"
+        " and the same rule run as published ($%.2f$); \\textsc{Nestful} $%.2f$, above both"
+        " ($%.2f$ and $%.2f$). \\methodname{}'s own $4$B cells: Table~\\ref{tab:transfermain}."
+        % (nfam4b, pp(_full4b["mean"]), pp(_best4b["mean"]),
+           pp(_bank4b["mean"] - _best4b["mean"]),
+           _t7["t4bTbk"][0], _t7["base4b"][0], _t7["q4bTf"][0],
+           _t7["t4bTbk"][1], _t7["base4b"][1], _t7["q4bTf"][1]),
+        "The last row is the same rung at $8$B, read at $8$B throughout: against the $8$B anchor,"
+        " in the $%d$-arm $8$B Holm family, and with a $\\Delta$ against the $8$B full method's own"
+        " offset-$500$ seed ($%s$); against the seed Table~\\ref{tab:main} prints ($%s$) it is"
+        " $%s$, so it falls below both. \\textbf{At this scale the bank does not lift the published"
+        " rule, it sinks it}: the window goes $%s \\to %s$, and on transfer \\textsc{Bfcl} rises to"
+        " $%.2f$ from $%.2f$, above the untrained $8$B base policy ($%.2f$), while"
+        " \\textsc{Nestful} falls to $%.2f$ from $%.2f$, \\emph{below} that policy ($%.2f$)."
+        " \\methodname{} carries the identical bank at this scale and is above the base policy on"
+        " both benchmarks: Table~\\ref{tab:transfermain}."
+        % (nfam8b, pp(_full8b["mean"]), pp(_best8b["mean"]),
+           pp(_bank8b["mean"] - _best8b["mean"]),
+           pp(_pub8b["mean"]), pp(_bank8b["mean"]),
+           _t7["t8Tbk"][0], _t7["t8Tf"][0], _t7["base8b"][0],
+           _t7["t8Tbk"][1], _t7["t8Tf"][1], _t7["base8b"][1])])
     W("coadapt2b.tex", L)
 
     # ---- POOL ROBUSTNESS: TRIAGE vs uniform on pool_big320 (DAPO's own training pool) --------
@@ -4192,10 +5433,13 @@ def emit_tables(outdir):
         " \\emph{rerun}: the arm's step-$30$ adapter was pruned once its window was scored, so the"
         " configuration was trained again at the same seed offset, and a rerun is a fresh draw"
         " rather than a second reading of one run. Its window cells are its own"
-        " (Table~\\ref{tab:reruns}) and the row's window cells in Table~\\ref{tab:main} are still"
-        " the original run's.\\quad \\textsuperscript{\\S}~a per-column"
-        " selection over the configurations below it, made after these measurements existed; the"
-        " \\methodname{} $-$ uniform row at the foot is the fixed-$\\rho$ row minus the control."
+        " (Appendix~\\ref{app:reportrules} names the three arms) and the row's window cells in"
+        " Table~\\ref{tab:main} are still"
+        " the original run's.\\quad \\textsuperscript{\\S}~the per-column maximum over the"
+        " configurations below it, printed as measured. No claim in this paper is read off it:"
+        " the method row of Table~\\ref{tab:main}, Figure~\\ref{fig:transfermain}'s"
+        " \\methodname{} bar and the \\methodname{} $-$ uniform row at the foot are all the"
+        " full recipe."
         "\\quad \\textsuperscript{\\P}~a \\emph{step-mismatched} difference: the \\methodname{}"
         " cell above it is read at step $30$ and the control's at step $15$, the only step that"
         " control checkpoint was scored at.",
@@ -4212,7 +5456,7 @@ def emit_tables(outdir):
         " at step $30$, and every other one is the"
         " seed its \\textsc{Bfcl} cell is read on. \\emph{No significance marker appears here}:"
         " the registered paired-seed contrasts and their $p$ are in"
-        " Table~\\ref{tab:transfer} and, for the seed-replicated \\textsc{Nestful} contrast,"
+        " Appendix~\\ref{app:genfull} and, for the seed-replicated \\textsc{Nestful} contrast,"
         " among the floats withdrawn in Appendix~\\ref{app:movedseeds}."])
     # The method and control BFCL cells above are produced by _pick()/_bfcl_cell(); tri_b/uni_b
     # come from BR.scale_block()'s own arm lists and feed the difference row. They must be the
@@ -4256,12 +5500,16 @@ def emit_tables(outdir):
 
     lrbase, _ = _bfcl(LR_BASE)
     L = [GEN,
-         "%% 2B anchor n=%d; every rung is in the same %d-arm 2B Holm family as tab:main"
+         "%% 2B anchor n=%d; the 2B rungs are in the same %d-arm 2B Holm family as tab:main"
          % (fams["2B"][1], fams["2B"][2]),
+         "%% 4B anchor n=%d; the 4B rungs are in the same %d-arm 4B Holm family as tab:main"
+         % (fams["4B"][1], fams["4B"][2]),
          "% One run per rung, all at seed offset 500: the rungs differ from each other by the LR",
          "% token alone, and a rung on a fresh offset would confound the learning rate with the",
          "% surface draw. The seed-aggregated values for these two CONFIGURATIONS are tab:main's.",
          "% The transfer column is the SAME BFCL evaluation as tab:transfer's, n=800, step 30.",
+         "% The 4B block (2026-09-04) is the same construction one scale up; each block's delta",
+         "% is against ITS OWN scale's untrained base policy, never across scales.",
          "\\begin{tabular}{llrrr}", "\\toprule",
          " & learning & window & \\textsc{Bfcl} & $\\Delta$ vs \\\\",
          "allocation & rate & mean (pp) & pass (\\%) & base (pp) \\\\", "\\midrule",
@@ -4273,6 +5521,34 @@ def emit_tables(outdir):
         L.append("%s & %s & $%s$ & $%.1f$ & $%+.1f$ \\\\"
                  % (lab, lr, pp(a["mean"]), b, b - lrbase))
         lrlog.append((lab, lr, arm, 100 * a["mean"], b))
+    # ---- THE SAME TWO RATES AT 4B (2026-09-04 _fold10) ---------------------------------------
+    # Rows only: no column and no float is added, and the 2B block above is byte-identical to what
+    # it printed before this pass. See LR_LADDER_4B for the pre-registered readout.
+    lrbase4, _ = _bfcl(LR_BASE_4B)
+    L += ["\\midrule", "\\multicolumn{5}{l}{%s} \\\\" % LR_HDR_4B,
+          "untrained base policy & --- & --- & $%.1f$ & --- \\\\" % lrbase4]
+    lr4 = {}
+    for lab, lr, arm in LR_LADDER_4B:
+        a = agg(fams["4B"][0], [arm])
+        b, _ = _bfcl(arm)
+        if a is None or b is None:
+            raise SystemExit("tab:lrsweep: 4B rung %s has no %s cell; a partial ladder is not "
+                             "printed" % (arm, "window" if a is None else "BFCL"))
+        L.append("%s & %s & $%s$ & $%.1f$ & $%+.1f$ \\\\"
+                 % (lab, lr, pp(a["mean"]), b, b - lrbase4))
+        lr4[arm] = (100 * a["mean"], b)
+        lrlog.append((lab + " (4B)", lr, arm, 100 * a["mean"], b))
+    # THE PRE-REGISTERED READOUT, AS A BUILD REFUSAL. The caption and Section 4's transfer
+    # paragraph both say that at 4B the uniform control's transfer damage is rate-specific and
+    # that the method is above the untrained policy on BFCL at the safe rate; if either stops
+    # being true the build fails rather than reprinting the claim.
+    if not (lr4["q4bF3e5"][1] > lr4["q4bF"][1]):
+        raise SystemExit("tab:lrsweep: the caption asserts that the 4B uniform control RECOVERS "
+                         "on BFCL at 3e-5 and the records say otherwise: %s" % lr4)
+    if not (lr4["q4bT3e5"][1] > lrbase4 and lr4["q4bT3e5"][1] > lr4["q4bF3e5"][1]):
+        raise SystemExit("tab:lrsweep: the caption asserts that at 4B and 3e-5 the method is above "
+                         "both the untrained policy (%.2f) and the matched uniform rung, and the "
+                         "records say otherwise: %s" % (lrbase4, lr4))
     L += ["\\bottomrule", "\\end{tabular}"]
     W("lrsweep.tex", L)
 
@@ -4630,6 +5906,51 @@ def emit_tables(outdir):
         print("     %-4s %-34s %7d %8.2f %8s %7.2f" % (model, "ANCHOR (untrained, full cell)",
                                                        n, r, "--", t))
     print("     CI = 1.96*sqrt(p(1-p)/n) on the pooled paired cells; NOT seed spread.")
+    # THE INVALID TOOL-CALL COLUMN, DECOMPOSED. That column is a RATIO whose denominator is the
+    # attempted calls, so a row can regress on it while emitting fewer bad calls per task than the
+    # reference. Section 7.2 states that at 2B, and the counts it states are printed here rather
+    # than derived in prose.
+    print("  -- tab:main invalid tool-call column: numerator and denominator per task --")
+    print("     %-4s %-22s %9s %9s %9s %9s" % ("mdl", "row", "att/task", "bad/task",
+                                               "rate %", "turns"))
+    for model in MAIN_SCALES:
+        sub = {k: bases[model][k] for k in sharedidx[model]}
+        for lab, arm, steps in (("untrained base", BASE_CELLS[model], [None]),
+                                ("method row", None, None)):
+            if arm is None:
+                a = agg(fams[model][0], METHOD_SPEC.get(model), best=True)
+                arm = a["sel"]
+                # The method row's printed rate is read at ONE checkpoint since the 2026-09-02
+                # ruling, so its decomposition is read there too: Section 7.2 quotes these two
+                # counts as the explanation of the printed ratio, and an explanation read over a
+                # window would not decompose the number beside it.
+                if T1_METHOD_BEST_STEP and model in t1step:
+                    lab = "method row @%d" % t1step[model]
+                    steps = [t1step[model]]
+            inv = att = tsum = 0.0
+            tn = 0
+            for st in (WINDOW if steps is None else steps):
+                cur = cell_records(cell_path(arm, st) if st is not None else arm)
+                # THE INDEX IS THE ONE EACH ROW IS PRINTED ON, and it is keyed off the row and
+                # not off `steps`: the anchor is read on the table's shared index (it has no
+                # checkpoint), the method row on its own pairs, exactly as tab:main reads them.
+                keys = sorted(set(cur) & set(sub if arm is BASE_CELLS[model]
+                                             else bases[model]))
+                if len(keys) < 300:
+                    continue
+                for k in keys:
+                    d = cur[k]
+                    pf = float(d.get("n_parse_fail") or 0)
+                    un = float(d.get("n_unknown_tool") or 0)
+                    bc = float(d.get("n_backend_calls") or 0)
+                    inv += pf + un
+                    att += pf + un + bc
+                    t = d.get("n_turns")
+                    if t is not None:
+                        tsum += float(t)
+                        tn += 1
+            print("     %-4s %-22s %9.2f %9.2f %9.2f %9.2f"
+                  % (model, lab, att / tn, inv / tn, 100.0 * inv / att, tsum / tn))
     print("     4B coverage gap: VIP and TSCL have no 4B arm with a window (allocation expired).")
     print("  -- BFCL per tab:main row (NOT a column any more; see tab:transfer/tab:bfcl) --")
     for kind, lab, spec in MAIN:

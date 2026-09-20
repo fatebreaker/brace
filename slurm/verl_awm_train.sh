@@ -170,6 +170,7 @@ exec $E/bin/python -m verl.trainer.main_ppo ${WB_ARG:+$WB_ARG} ${KEEP_ARG:+$KEEP
   actor_rollout_ref.actor.use_kl_loss=False \
   actor_rollout_ref.actor.ppo_mini_batch_size=$MINIBSZ \
   actor_rollout_ref.actor.use_dynamic_bsz=True \
+  actor_rollout_ref.actor.ulysses_sequence_parallel_size=${ULYSSES:-1} \
   actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${MAXTOK:-$((PROMPT_LEN+RESP_LEN))} \
   actor_rollout_ref.actor.fsdp_config.param_offload=${PARAM_OFFLOAD:-False} \
   actor_rollout_ref.actor.fsdp_config.optimizer_offload=${OPT_OFFLOAD:-False} \
