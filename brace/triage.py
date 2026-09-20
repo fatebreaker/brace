@@ -408,7 +408,7 @@ import argparse, glob, json, math, os, subprocess, sys
 
 import numpy as np
 
-R = os.environ.get("BRACE_ROOT", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+R = os.environ.get("BRACE_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Interpreter locations, resolved from the environment so no absolute path is baked in.
 # BRACE_ENVS is the parent directory of the three project environments (see README.md);
 # VERL_PY / AWM_PY / VLLM_PY override an individual interpreter.
@@ -421,8 +421,15 @@ VLLM_PY = os.environ.get("VLLM_PY", os.path.join(ENVS, "mcp_vllm", "bin", "pytho
 # evidence stream, read incrementally with an offset, and counting it twice would double the
 # weight of exactly the observations the method is supposed to be driven by.
 DEFAULT_BANK = f"{R}/work/verl/run_*/episodes.jsonl"
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from aws_reweight import beta_moment            # noqa: E402  the same closed form the AWS arm uses
+
+
+def beta_moment(a, b, k):
+    """E[p^k] for p ~ Beta(a, b), by the rising-factorial identity. The allocator's weight
+    w = 1 - E[p^k] - E[(1-p)^k] is two calls to this."""
+    r = 1.0
+    for i in range(k): r *= (a + i) / (a + b + i)
+    return r
+
 
 BANDS = (("p_lt_005", 0.00, 0.05), ("p_005_02", 0.05, 0.20), ("p_02_08", 0.20, 0.80),
          ("p_08_095", 0.80, 0.95), ("p_gt_095", 0.95, 1.01))

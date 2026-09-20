@@ -49,7 +49,9 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-MCP = os.path.dirname(ROOT)
+# The checkout root: where the study mains look for paired evaluation records, under
+# $BRACE_ROOT/work/. Set BRACE_ROOT when the records live elsewhere.
+MCP = os.environ.get("BRACE_ROOT", ROOT)
 CALLERS = ["qwen", "granite", "mistral", "falcon3"]
 
 

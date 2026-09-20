@@ -59,7 +59,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.special import betaln, comb
 
-R = os.environ.get("BRACE_ROOT", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+R = os.environ.get("BRACE_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # THE ARMS, LISTED EXPLICITLY AND NOT GLOBBED. Group reconstruction chunks an episode log into
 # BSZ*NROLL blocks, so an arm whose batch shape differs is silently mis-chunked by a glob -- and a

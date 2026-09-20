@@ -1,6 +1,0 @@
-# verl custom agent loop registry.
-# agent_loop.py reads this list and does _agent_loop_registry[name] = entry;
-# hydra.utils.instantiate imports the _target_ module lazily, so awm_agent_loop.py
-# only needs to be importable (PYTHONPATH must contain surface/verl_rl).
-- name: awm_agent
-  _target_: awm_agent_loop.AwmAgentLoop
