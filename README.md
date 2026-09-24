@@ -141,9 +141,3 @@ python discord/discordant_gate.py --group 4 --alpha 0.025 --out gate.json
 python discord/required_budget.py --target 0.8 --out budget.json
 python discord/targeted_gate.py   --budget 200 --block 20 --out targeted.json
 ```
-
-## Not included
-
-The MCP agent environment and its reward, the training driver, the evaluation and transfer
-harnesses, the cluster scripts, and everything belonging to the paper. This repository is the two
-methods and nothing else.
